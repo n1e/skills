@@ -4,6 +4,9 @@
 问财数据采集器
 用于获取大盘数据、涨停股票、成交量历史等
 参考: skills/stock-heat-rank-py/main.py 中的实现
+
+注意：问财 API 可能需要验证码验证。
+当问财不可用时，会自动使用 akshare 作为回退数据源。
 """
 
 import os
@@ -12,6 +15,7 @@ import subprocess
 import sys
 import time
 import urllib.parse
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 import requests
@@ -21,6 +25,134 @@ from utils.retry import retry_with_backoff
 from utils.helpers import rand_string
 from models.market import VolumeData
 from models.stock import SurgeStock, HeatRank
+
+
+class AKShareFallback:
+    """AKShare 回退数据源
+    当问财 API 不可用时使用
+    """
+    
+    def __init__(self):
+        self._akshare_available = None
+        self._ak = None
+    
+    def _check_akshare(self) -> bool:
+        """检查 akshare 是否可用"""
+        if self._akshare_available is not None:
+            return self._akshare_available
+        
+        try:
+            import akshare as ak
+            self._ak = ak
+            self._akshare_available = True
+            logger.info("AKShare 可用，将作为问财的回退数据源")
+            return True
+        except ImportError:
+            self._akshare_available = False
+            logger.warning("AKShare 未安装，问财失败时将无法获取数据")
+            return False
+    
+    def get_limit_up_stocks(self, trade_date: str = None, min_change: float = 9.5) -> List[SurgeStock]:
+        """
+        使用 akshare 获取涨停股票
+        
+        Args:
+            trade_date: 交易日期，格式为 'YYYYMMDD'，默认为今天
+            min_change: 最小涨幅阈值
+            
+        Returns:
+            涨停股票列表
+        """
+        if not self._check_akshare():
+            return []
+        
+        try:
+            if trade_date is None:
+                trade_date = datetime.now().strftime('%Y%m%d')
+            
+            logger.info(f"使用 AKShare 获取 {trade_date} 涨停股票...")
+            
+            df = self._ak.stock_zt_pool_em(date=trade_date)
+            
+            if df is None or len(df) == 0:
+                logger.warning("AKShare 获取涨停股票数据为空")
+                return []
+            
+            stocks = []
+            for _, row in df.iterrows():
+                code = str(row.get('代码', ''))
+                name = str(row.get('名称', ''))
+                price = float(row.get('最新价', 0))
+                change_pct = float(row.get('涨跌幅', 0))
+                reason = str(row.get('涨停原因类别', row.get('涨停原因', '')))
+                
+                if change_pct >= min_change:
+                    stocks.append(SurgeStock(
+                        code=code,
+                        name=name,
+                        price=price,
+                        change_pct=change_pct,
+                        reason=reason
+                    ))
+            
+            logger.info(f"AKShare 获取到 {len(stocks)} 只涨停股")
+            return stocks
+            
+        except Exception as e:
+            logger.error(f"AKShare 获取涨停股票失败: {e}")
+            return []
+    
+    def get_volume_history(self, days: int = 30) -> List[VolumeData]:
+        """
+        使用 akshare 获取成交量历史
+        注意：akshare 没有直接的大盘成交量历史接口，这里使用上证指数成交量作为近似
+        
+        Args:
+            days: 获取天数
+            
+        Returns:
+            成交量数据列表
+        """
+        if not self._check_akshare():
+            return []
+        
+        try:
+            logger.info(f"使用 AKShare 获取最近 {days} 日上证指数成交量...")
+            
+            end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now().replace(day=1) - __import__('datetime').timedelta(days=days*2)).strftime('%Y%m%d')
+            
+            df = self._ak.stock_zh_a_hist(
+                symbol="000001",
+                period="daily",
+                start_date=start_date,
+                end_date=end_date,
+                adjust=""
+            )
+            
+            if df is None or len(df) == 0:
+                logger.warning("AKShare 获取上证指数数据为空")
+                return []
+            
+            volumes = []
+            recent_days = df.tail(days)
+            
+            for _, row in recent_days.iterrows():
+                date_str = str(row.get('日期', ''))
+                volume = float(row.get('成交量', 0))
+                
+                if date_str and volume > 0:
+                    volumes.append(VolumeData(
+                        date=date_str,
+                        volume=volume
+                    ))
+            
+            logger.info(f"AKShare 获取到 {len(volumes)} 日成交量数据")
+            return volumes
+            
+        except Exception as e:
+            logger.error(f"AKShare 获取成交量历史失败: {e}")
+            return []
 
 
 def _find_project_root() -> str:
@@ -46,7 +178,10 @@ def find_hexin_v_js() -> str:
 
 
 class WencaiFetcher:
-    """问财数据采集器 - 参考stock-heat-rank-py实现"""
+    """问财数据采集器 - 参考stock-heat-rank-py实现
+    
+    当问财 API 不可用时（如需要验证码），会自动使用 AKShare 作为回退数据源。
+    """
     
     def __init__(self):
         self.session = requests.Session()
@@ -57,6 +192,39 @@ class WencaiFetcher:
             'v': ''
         }
         self.js_path = find_hexin_v_js()
+        self._fallback = AKShareFallback()
+        self._wencai_available = None
+    
+    def _check_wencai_available(self) -> bool:
+        """检查问财 API 是否可用"""
+        if self._wencai_available is not None:
+            return self._wencai_available
+        
+        try:
+            logger.info("检查问财 API 是否可用...")
+            self._init_session()
+            result = self.query("上证指数", perpage=1)
+            
+            if isinstance(result, dict):
+                captcha_url = result.get('data', {}).get('captcha_url')
+                if captcha_url:
+                    logger.warning("问财 API 需要验证码验证，将使用 AKShare 作为回退数据源")
+                    self._wencai_available = False
+                    return False
+                
+                errno = result.get('errno', result.get('status_code', -1))
+                if errno == 0:
+                    logger.info("问财 API 可用")
+                    self._wencai_available = True
+                    return True
+            
+            self._wencai_available = False
+            return False
+            
+        except Exception as e:
+            logger.warning(f"问财 API 检查失败: {e}，将使用 AKShare 作为回退数据源")
+            self._wencai_available = False
+            return False
     
     def _generate_hexin_v(self) -> str:
         """生成Hexin-V签名"""
@@ -239,8 +407,16 @@ class WencaiFetcher:
             return []
     
     def get_volume_history(self, days: int = 30) -> List[VolumeData]:
-        """获取指定天数的成交额历史（使用A股总成交金额，单位：元）"""
+        """获取指定天数的成交额历史（使用A股总成交金额，单位：元）
+        
+        优先使用问财 API，如果问财不可用则使用 AKShare 作为回退。
+        """
         logger.info(f"获取最近{days}日成交额历史")
+        
+        if not self._check_wencai_available():
+            logger.info("使用 AKShare 回退数据源获取成交量历史")
+            return self._fallback.get_volume_history(days)
+        
         volumes = []
         
         try:
@@ -249,6 +425,14 @@ class WencaiFetcher:
             
             # 使用用户提供的查询语句
             result = self.query(f"A股总成交金额 最近{days}个交易日", perpage=days)
+            
+            # 检查是否需要验证码
+            if isinstance(result, dict):
+                captcha_url = result.get('data', {}).get('captcha_url')
+                if captcha_url:
+                    logger.warning("问财 API 返回验证码要求，切换到 AKShare 回退数据源")
+                    self._wencai_available = False
+                    return self._fallback.get_volume_history(days)
             
             # 直接从返回数据中提取
             try:
@@ -304,17 +488,35 @@ class WencaiFetcher:
             
             logger.info(f"获取到 {len(volumes)} 日成交额数据")
         except Exception as e:
-            logger.error(f"成交额历史查询失败: {e}")
+            logger.error(f"成交额历史查询失败: {e}，尝试使用 AKShare 回退数据源")
+            return self._fallback.get_volume_history(days)
         
         return volumes
     
     def get_surge_stocks(self, min_change: float = 9.5, max_stocks: int = 200) -> List[SurgeStock]:
-        """获取涨停股票列表"""
+        """获取涨停股票列表
+        
+        优先使用问财 API，如果问财不可用则使用 AKShare 作为回退。
+        """
         logger.info(f"获取涨停股票（最低涨幅{min_change}%）")
+        
+        if not self._check_wencai_available():
+            logger.info("使用 AKShare 回退数据源获取涨停股票")
+            return self._fallback.get_limit_up_stocks(min_change=min_change)
+        
         stocks = []
         
         try:
             result = self.query(f"今日涨停股", perpage=max_stocks)
+            
+            # 检查是否需要验证码
+            if isinstance(result, dict):
+                captcha_url = result.get('data', {}).get('captcha_url')
+                if captcha_url:
+                    logger.warning("问财 API 返回验证码要求，切换到 AKShare 回退数据源")
+                    self._wencai_available = False
+                    return self._fallback.get_limit_up_stocks(min_change=min_change)
+            
             datas = self._parse_answer(result)
             
             for item in datas:
@@ -354,21 +556,39 @@ class WencaiFetcher:
             
             logger.info(f"获取到 {len(stocks)} 只涨停股")
         except Exception as e:
-            logger.error(f"涨停股票查询失败: {e}")
+            logger.error(f"涨停股票查询失败: {e}，尝试使用 AKShare 回退数据源")
+            return self._fallback.get_limit_up_stocks(min_change=min_change)
         
         return stocks
     
     def get_heat_rank(self, top: int = 50) -> List[HeatRank]:
-        """获取问财人气排名（参考stock-heat-rank-py实现）"""
+        """获取问财人气排名（参考stock-heat-rank-py实现）
+        
+        优先使用问财 API，如果问财不可用则返回空列表。
+        人气排名还有雪球和东方财富作为替代数据源。
+        """
         logger.info(f"获取问财人气排名TOP{top}")
         
-        # 初始化会话
-        self._init_session()
+        if not self._check_wencai_available():
+            logger.info("问财 API 不可用，人气排名将使用雪球和东方财富数据")
+            return []
         
         ranks = []
         
         try:
+            # 初始化会话
+            self._init_session()
+            
             result = self.query(f"人气排名前{top}", perpage=top)
+            
+            # 检查是否需要验证码
+            if isinstance(result, dict):
+                captcha_url = result.get('data', {}).get('captcha_url')
+                if captcha_url:
+                    logger.warning("问财 API 返回验证码要求，人气排名将使用雪球和东方财富数据")
+                    self._wencai_available = False
+                    return []
+            
             datas = self._parse_answer(result)
             
             for i, item in enumerate(datas[:top]):
@@ -391,6 +611,6 @@ class WencaiFetcher:
             
             logger.info(f"问财获取到 {len(ranks)} 只股票")
         except Exception as e:
-            logger.error(f"问财人气排名获取失败: {e}")
+            logger.error(f"问财人气排名获取失败: {e}，将使用雪球和东方财富数据")
         
         return ranks
