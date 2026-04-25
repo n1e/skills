@@ -1,0 +1,7 @@
+requests>=2.28.0
+colorlog>=6.0.0
+reportlab>=4.0.0
+matplotlib>=3.5.0
+
+# 可选依赖（增强功能）
+# tenacity>=8.0.0  # 更强大的重试机制（如需要可使用）

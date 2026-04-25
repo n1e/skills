@@ -1,0 +1,18 @@
+{
+  "run_time": "16:00",
+  "output_dir": "output",
+  "market": {
+    "min_change_pct": 9.5
+  },
+  "heat_rank": {
+    "top": 50,
+    "sources": ["wencai", "xueqiu", "eastmoney", "thsi"]
+  },
+  "surge": {
+    "min_change_pct": 9.5,
+    "max_stocks": 200
+  },
+  "volume_history": {
+    "days": 30
+  }
+}
