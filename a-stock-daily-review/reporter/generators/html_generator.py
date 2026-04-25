@@ -1213,7 +1213,7 @@ class HTMLGenerator:
         setTimeout(() => {{
             // 市场情绪仪表盘 (恐慌指数)
             const needle = document.getElementById('gaugeNeedle');
-            const fearAngle = {fear_index} / 100 * 180;
+            const fearAngle = -90 + ({fear_index} / 100 * 180);
             needle.style.transform = `translateX(-50%) rotate(${{fearAngle}}deg)`;
             
             // 市场涨跌分布仪表盘
