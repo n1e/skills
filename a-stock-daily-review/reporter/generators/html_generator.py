@@ -293,7 +293,7 @@ class HTMLGenerator:
         .semi-gauge-needle {{
             position: absolute;
             width: 4px;
-            height: 130px;
+            height: 110px;
             background: #333;
             bottom: 0;
             left: 50%;
@@ -302,6 +302,8 @@ class HTMLGenerator:
             border-radius: 2px;
             transition: transform 1.5s cubic-bezier(0.34, 1.56, 0.64, 1);
             z-index: 10;
+            mask: radial-gradient(at 50% 100%, transparent 71%, black 72%);
+            -webkit-mask: radial-gradient(at 50% 100%, transparent 71%, black 72%);
         }}
         
         .semi-gauge-needle::after {{
@@ -498,6 +500,8 @@ class HTMLGenerator:
             transform: translateX(-50%) rotate(0deg);
             border-radius: 2px;
             transition: transform 1s ease;
+            mask: radial-gradient(at 50% 100%, transparent 60%, black 61%);
+            -webkit-mask: radial-gradient(at 50% 100%, transparent 60%, black 61%);
         }}
         
         .gauge-center {{
