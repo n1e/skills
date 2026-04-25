@@ -9,6 +9,7 @@ from typing import List
 import requests
 
 from logger import logger
+from models.stock import HeatRank
 from utils.retry import retry_with_backoff
 
 
@@ -27,7 +28,7 @@ class EastmoneyFetcher:
         }
     
     @retry_with_backoff(initial_delay=1.0, max_delay=5.0, max_attempts=3)
-    def fetch(self, top: int = 50) -> List[dict]:
+    def fetch(self, top: int = 50) -> List[HeatRank]:
         """
         获取东方财富人气排名前50
         
@@ -69,17 +70,17 @@ class EastmoneyFetcher:
                 code = sc[2:]  # 去掉前缀
                 name = item.get('n', '')
                 
-                ranks.append({
-                    'code': code,
-                    'name': name,
-                    'rank': i + 1,
-                    'heat_score': 100 - i,
-                    'source': 'eastmoney'
-                })
+                ranks.append(HeatRank(
+                    code=code,
+                    name=name,
+                    rank=i + 1,
+                    heat_score=100 - i,
+                    source='eastmoney'
+                ))
             
             logger.info(f"东财获取到 {len(ranks)} 只股票")
             return ranks
             
         except Exception as e:
             logger.error(f"东财人气排名获取失败: {e}")
-            raise
+            return []

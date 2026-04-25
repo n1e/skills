@@ -11,6 +11,7 @@ from typing import List
 import requests
 
 from logger import logger
+from models.stock import HeatRank
 from utils.retry import retry_with_backoff
 
 
@@ -26,7 +27,7 @@ class XueqiuFetcher:
         }
     
     @retry_with_backoff(initial_delay=1.0, max_delay=5.0, max_attempts=3)
-    def fetch(self, top: int = 50) -> List[dict]:
+    def fetch(self, top: int = 50) -> List[HeatRank]:
         """
         获取雪球热榜A股前50
         
@@ -66,17 +67,17 @@ class XueqiuFetcher:
                     except:
                         decoded_name = name
                 
-                ranks.append({
-                    'code': code,
-                    'name': decoded_name,
-                    'rank': len(ranks) + 1,
-                    'heat_score': 100 - len(ranks),
-                    'source': 'xueqiu'
-                })
+                ranks.append(HeatRank(
+                    code=code,
+                    name=decoded_name,
+                    rank=len(ranks) + 1,
+                    heat_score=100 - len(ranks),
+                    source='xueqiu'
+                ))
             
             logger.info(f"雪球获取到 {len(ranks)} 只A股")
             return ranks
             
         except Exception as e:
             logger.error(f"雪球热榜获取失败: {e}")
-            raise
+            return []

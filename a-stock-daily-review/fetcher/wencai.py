@@ -12,7 +12,6 @@ import subprocess
 import sys
 import time
 import urllib.parse
-from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 import requests
@@ -20,27 +19,29 @@ import requests
 from logger import logger
 from utils.retry import retry_with_backoff
 from utils.helpers import rand_string
-from models.market import MarketData, VolumeData
-from models.stock import SurgeStock
+from models.market import VolumeData
+from models.stock import SurgeStock, HeatRank
+
+
+def _find_project_root() -> str:
+    """从当前文件向上查找项目根目录（以 SKILL.md 为标识）"""
+    current = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(10):
+        if os.path.exists(os.path.join(current, 'SKILL.md')):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 def find_hexin_v_js() -> str:
     """查找hexin_v.js路径"""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    # 向上找3层到项目根目录
-    for _ in range(4):
-        script_dir = os.path.dirname(script_dir)
-    
-    js_path = os.path.join(script_dir, 'lib', 'hexin_v.js')
+    root = _find_project_root()
+    js_path = os.path.join(root, 'lib', 'hexin_v.js')
     if os.path.exists(js_path):
         return js_path
-    
-    # 尝试相对路径
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    js_path = os.path.join(current_dir, '..', '..', 'lib', 'hexin_v.js')
-    if os.path.exists(js_path):
-        return js_path
-    
     return 'lib/hexin_v.js'
 
 
@@ -237,86 +238,6 @@ class WencaiFetcher:
             logger.error(f"解析问财数据失败: {e}")
             return []
     
-    def get_market_data(self) -> MarketData:
-        """获取大盘数据"""
-        logger.info("开始获取大盘数据")
-        self._init_session()
-        
-        market = MarketData()
-        market.date = datetime.now().strftime('%Y-%m-%d')
-        
-        # 查询涨跌统计
-        try:
-            result = self.query("今日沪深A股涨跌统计")
-            datas = self._parse_answer(result)
-            if datas:
-                item = datas[0]
-                market.up_count = int(item.get('上涨家数', item.get('上涨', 0)))
-                market.down_count = int(item.get('下跌家数', item.get('下跌', 0)))
-                market.flat_count = int(item.get('平盘家数', item.get('平盘', 0)))
-                market.total_count = market.up_count + market.down_count + market.flat_count
-                logger.info(f"涨跌统计: 上涨{market.up_count}, 下跌{market.down_count}, 平盘{market.flat_count}")
-        except Exception as e:
-            logger.error(f"涨跌统计查询失败: {e}")
-        
-        # 查询涨跌停数量
-        try:
-            result = self.query("今日沪深A股涨跌停数量")
-            datas = self._parse_answer(result)
-            if datas:
-                item = datas[0]
-                market.limit_up_count = int(item.get('涨停家数', item.get('涨停', 0)))
-                market.limit_down_count = int(item.get('跌停家数', item.get('跌停', 0)))
-                logger.info(f"涨跌停: 涨停{market.limit_up_count}, 跌停{market.limit_down_count}")
-        except Exception as e:
-            logger.error(f"涨跌停查询失败: {e}")
-        
-        # 查询真实涨跌停（非一字板）
-        try:
-            result = self.query("今日非一字涨停股票")
-            datas = self._parse_answer(result)
-            if datas:
-                market.real_limit_up_count = len(datas)
-                logger.info(f"非一字涨停: {market.real_limit_up_count}")
-        except Exception as e:
-            logger.error(f"非一字涨停查询失败: {e}")
-        
-        try:
-            result = self.query("今日非一字跌停股票")
-            datas = self._parse_answer(result)
-            if datas:
-                market.real_limit_down_count = len(datas)
-                logger.info(f"非一字跌停: {market.real_limit_down_count}")
-        except Exception as e:
-            logger.error(f"非一字跌停查询失败: {e}")
-        
-        # 查询停牌家数
-        try:
-            result = self.query("今日沪深A股停牌家数")
-            datas = self._parse_answer(result)
-            if datas:
-                item = datas[0]
-                market.suspension_count = int(item.get('停牌家数', item.get('停牌', 0)))
-                logger.info(f"停牌家数: {market.suspension_count}")
-        except Exception as e:
-            logger.error(f"停牌家数查询失败: {e}")
-        
-        # 查询成交量
-        try:
-            result = self.query("今日沪深两市总成交量")
-            datas = self._parse_answer(result)
-            if datas:
-                item = datas[0]
-                vol = item.get('总成交量', item.get('成交量', '0'))
-                if isinstance(vol, str):
-                    vol = vol.replace(',', '')
-                market.total_volume = float(vol)
-                logger.info(f"总成交量: {market.total_volume:,.0f}手")
-        except Exception as e:
-            logger.error(f"成交量查询失败: {e}")
-        
-        return market
-    
     def get_volume_history(self, days: int = 30) -> List[VolumeData]:
         """获取指定天数的成交额历史（使用A股总成交金额，单位：元）"""
         logger.info(f"获取最近{days}日成交额历史")
@@ -437,56 +358,7 @@ class WencaiFetcher:
         
         return stocks
     
-    def analyze_surge_reason(self, reason: str) -> str:
-        """分析涨停原因分类"""
-        if not reason:
-            return "其他"
-        
-        reason_lower = reason.lower()
-        
-        # 业绩相关
-        if any(kw in reason_lower for kw in ['业绩', '增长', '利润', '预增', '扭亏', '盈利']):
-            return "业绩预增"
-        
-        # 并购重组
-        if any(kw in reason_lower for kw in ['重组', '并购', '收购', '借壳', '股权', '转让']):
-            return "并购重组"
-        
-        # 政策利好
-        if any(kw in reason_lower for kw in ['政策', '补贴', '扶持', '规划', '利好', '新基建']):
-            return "政策利好"
-        
-        # 热点概念
-        if any(kw in reason_lower for kw in ['概念', '题材', '风口', 'ai', '人工智能', '新能源', '芯片']):
-            return "概念炒作"
-        
-        # 资金流入
-        if any(kw in reason_lower for kw in ['资金', '主力', '大单', '流入', '抢筹']):
-            return "资金推动"
-        
-        # 技术突破
-        if any(kw in reason_lower for kw in ['突破', '创新高', '新高', '启动', '爆发']):
-            return "技术突破"
-        
-        # 行业景气
-        if any(kw in reason_lower for kw in ['行业', '景气', '复苏', '供需', '涨价']):
-            return "行业景气"
-        
-        # 产品/订单
-        if any(kw in reason_lower for kw in ['订单', '产品', '签约', '中标', '合同']):
-            return "新产品/订单"
-        
-        # 股权激励
-        if any(kw in reason_lower for kw in ['激励', '回购', '增持', '员工持股']):
-            return "股权激励"
-        
-        # 高送转
-        if any(kw in reason_lower for kw in ['送转', '分红', '高送', '派息']):
-            return "高送转预期"
-        
-        return "其他"
-    
-    def get_heat_rank(self, top: int = 50) -> List:
+    def get_heat_rank(self, top: int = 50) -> List[HeatRank]:
         """获取问财人气排名（参考stock-heat-rank-py实现）"""
         logger.info(f"获取问财人气排名TOP{top}")
         
@@ -509,13 +381,13 @@ class WencaiFetcher:
                         code_str = code_str.split('.')[0]
                     # 只保留6位数字代码
                     if len(code_str) == 6 and code_str.isdigit():
-                        ranks.append({
-                            'code': code_str,
-                            'name': str(name),
-                            'rank': i + 1,
-                            'heat_score': top - i,
-                            'source': 'wencai'
-                        })
+                        ranks.append(HeatRank(
+                            code=code_str,
+                            name=str(name),
+                            rank=i + 1,
+                            heat_score=top - i,
+                            source='wencai'
+                        ))
             
             logger.info(f"问财获取到 {len(ranks)} 只股票")
         except Exception as e:

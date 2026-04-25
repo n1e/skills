@@ -7,9 +7,11 @@ A股每日复盘技能 - 主程序
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 # 添加当前目录到Python路径
@@ -18,17 +20,45 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import config
 from logger import setup_logger, logger
 from models.market import MarketData
-from models.stock import SurgeStock, CompositeHeatRank, HeatRank
+from models.stock import SurgeStock, CompositeHeatRank
 from models.review import DailyReview
 from fetcher.wencai import WencaiFetcher
 from fetcher.xueqiu import XueqiuFetcher
 from fetcher.eastmoney import EastmoneyFetcher
 from fetcher.legu import LeguFetcher
 from fetcher.funddb import FunddbFetcher
-from fetcher.akshare_fetcher import AKShareFetcher
 from analyzer.reason_analyzer import ReasonAnalyzer
 from analyzer.heat_ranker import HeatRanker
 from reporter.generators import MarkdownGenerator, JsonGenerator, PDFGenerator, HTMLGenerator
+
+
+def _cache_path(date: str) -> str:
+    """获取指定日期的缓存文件路径"""
+    output_dir = config.get('output_dir', 'output')
+    os.makedirs(output_dir, exist_ok=True)
+    return os.path.join(output_dir, f".cache_{date}.json")
+
+
+def _load_cache(date: str) -> dict:
+    """加载指定日期的缓存数据"""
+    path = _cache_path(date)
+    if os.path.exists(path):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_cache(date: str, cache: dict):
+    """保存指定日期的缓存数据"""
+    path = _cache_path(date)
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(cache, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"缓存写入失败: {e}")
 
 
 def collect_market_data(legu_fetcher: LeguFetcher) -> MarketData:
@@ -58,27 +88,8 @@ def collect_market_data(legu_fetcher: LeguFetcher) -> MarketData:
             market.suspension_count = int(legu_data.get('suspension_count', 0))
             market.real_limit_up_count = int(legu_data.get('real_limit_up_count', legu_data.get('real_raising_limit_count', 0)))
             market.real_limit_down_count = int(legu_data.get('real_limit_down_count', 0))
-            
-            # 计算总家数（上涨+下跌+平盘）
             market.total_count = market.up_count + market.down_count + market.flat_count
-            
-            # 涨跌分布
-            market.up_0_3 = int(legu_data.get('up_0_3', 0))
-            market.up_3_5 = int(legu_data.get('up_3_5', 0))
-            market.up_5_7 = int(legu_data.get('up_5_7', 0))
-            market.up_7_10 = int(legu_data.get('up_7_10', 0))
-            market.up_10_20 = int(legu_data.get('up_10_20', 0))
-            market.down_0_3 = int(legu_data.get('down_0_3', 0))
-            market.down_3_5 = int(legu_data.get('down_3_5', 0))
-            market.down_5_7 = int(legu_data.get('down_5_7', 0))
-            market.down_7_10 = int(legu_data.get('down_7_10', 0))
-            market.down_10_20 = int(legu_data.get('down_10_20', 0))
-            market.limit_up_count = int(legu_data.get('limit_up_count', 0))
-            market.limit_down_count = int(legu_data.get('limit_down_count', 0))
-            market.suspension_count = int(legu_data.get('suspension_count', 0))
-            market.real_limit_up_count = int(legu_data.get('real_limit_up_count', legu_data.get('real_raising_limit_count', 0)))
-            market.real_limit_down_count = int(legu_data.get('real_limit_down_count', legu_data.get('real_limit_down_count', 0)))
-            
+
             # 涨跌分布
             market.up_0_3 = int(legu_data.get('up_0_3', 0))
             market.up_3_5 = int(legu_data.get('up_3_5', 0))
@@ -112,17 +123,6 @@ def collect_market_data(legu_fetcher: LeguFetcher) -> MarketData:
                     logger.info(f"恐惧贪婪指数: 恐惧={market.fear_index:.1f}, 贪婪={market.greed_index:.1f}")
             except Exception as e:
                 logger.error(f"获取恐惧贪婪指数失败: {e}")
-            
-            # 获取市场新闻情绪指标（从akshare获取）
-            # 注：akshare接口依赖国内数据源，可能受网络环境影响
-            # try:
-            #     akshare_fetcher = AKShareFetcher()
-            #     sentiment_data = akshare_fetcher.get_news_sentiment()
-            #     if sentiment_data:
-            #         market.news_sentiment_index = sentiment_data['sentiment_index']
-            #         logger.info(f"市场新闻情绪指标: {market.news_sentiment_index:.4f}")
-            # except Exception as e:
-            #     logger.error(f"获取市场新闻情绪指标失败: {e}")
         else:
             logger.warning("乐股市场数据获取失败")
     except Exception as e:
@@ -168,103 +168,123 @@ def collect_surge_stocks(fetcher: WencaiFetcher, min_change: float = 9.5, max_st
     return stocks
 
 
-def collect_heat_ranks(top: int = 50):
+def collect_heat_ranks(wencai_fetcher: WencaiFetcher, top: int = 50):
     """
-    收集人气排名（多数据源：问财+雪球+东财）
+    收集人气排名（多数据源并发：问财+雪球+东财）
     注：问财就是同花顺的数据，不需要单独调用同花顺接口
-    
+
     Args:
+        wencai_fetcher: 问财采集器实例（复用已有会话）
         top: 获取排名数量
-        
+
     Returns:
         (问财排名, 雪球排名, 东财排名) 元组
     """
     logger.info(f"开始收集人气排名TOP{top}")
-    
-    # 问财人气排名（问财=同花顺数据）
-    wencai_ranks = []
-    try:
-        wencai_fetcher = WencaiFetcher()
-        wencai_ranks = wencai_fetcher.get_heat_rank(top)
-        logger.info(f"问财人气排名: {len(wencai_ranks)}只")
-    except Exception as e:
-        logger.error(f"问财人气排名收集失败: {e}")
-    
-    # 雪球热榜
-    xueqiu_ranks = []
-    try:
-        xueqiu_fetcher = XueqiuFetcher()
-        xueqiu_ranks = xueqiu_fetcher.fetch(top)
-        logger.info(f"雪球热榜: {len(xueqiu_ranks)}只")
-    except Exception as e:
-        logger.error(f"雪球热榜收集失败: {e}")
-    
-    # 东财人气排名
-    eastmoney_ranks = []
-    try:
-        eastmoney_fetcher = EastmoneyFetcher()
-        eastmoney_ranks = eastmoney_fetcher.fetch(top)
-        logger.info(f"东财人气排名: {len(eastmoney_ranks)}只")
-    except Exception as e:
-        logger.error(f"东财人气排名收集失败: {e}")
-    
+
+    wencai_ranks, xueqiu_ranks, eastmoney_ranks = [], [], []
+
+    def fetch_wencai():
+        return wencai_fetcher.get_heat_rank(top)
+
+    def fetch_xueqiu():
+        return XueqiuFetcher().fetch(top)
+
+    def fetch_eastmoney():
+        return EastmoneyFetcher().fetch(top)
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(fetch_wencai): 'wencai',
+            executor.submit(fetch_xueqiu): 'xueqiu',
+            executor.submit(fetch_eastmoney): 'eastmoney',
+        }
+        for future in as_completed(futures):
+            source = futures[future]
+            try:
+                result = future.result()
+                if source == 'wencai':
+                    wencai_ranks = result
+                    logger.info(f"问财人气排名: {len(wencai_ranks)}只")
+                elif source == 'xueqiu':
+                    xueqiu_ranks = result
+                    logger.info(f"雪球热榜: {len(xueqiu_ranks)}只")
+                elif source == 'eastmoney':
+                    eastmoney_ranks = result
+                    logger.info(f"东财人气排名: {len(eastmoney_ranks)}只")
+            except Exception as e:
+                logger.error(f"{source}人气排名收集失败: {e}")
+
     return wencai_ranks, xueqiu_ranks, eastmoney_ranks
 
 
 def build_review_data(date: str) -> DailyReview:
     """
-    构建完整的复盘数据
-    
+    构建完整的复盘数据（支持部分缓存，已成功的步骤不会重新获取）
+
     Args:
         date: 复盘日期
-        
+
     Returns:
         DailyReview对象
     """
     logger.info("=" * 60)
     logger.info(f"开始构建复盘数据 - {date}")
     logger.info("=" * 60)
-    
+
     review = DailyReview()
     review.date = date
-    
+    cache = _load_cache(date)
+
     # 从配置读取参数
     min_change = config.get('surge.min_change_pct', 9.5)
     max_stocks = config.get('surge.max_stocks', 200)
     top_rank = config.get('heat_rank.top', 50)
-    
+
     # 1. 收集大盘数据
     logger.info("\n[1/4] 收集大盘数据")
     wencai_fetcher = WencaiFetcher()
     legu_fetcher = LeguFetcher()
     review.market = collect_market_data(legu_fetcher)
-    
+
     # 2. 收集成交量历史
     logger.info("\n[2/4] 收集成交量历史")
     review.volume_history = collect_volume_history(wencai_fetcher, days=30)
-    
+
     # 3. 收集涨停股票
     logger.info("\n[3/4] 收集涨停股票")
     review.surge_stocks = collect_surge_stocks(wencai_fetcher, min_change, max_stocks)
-    
+    for stock in review.surge_stocks:
+        if not stock.reason_category:
+            stock.reason_category = ReasonAnalyzer.analyze(stock.reason)
+
     # 4. 收集人气排名（整合雪球、东财、问财三大平台的综合排名TOP50）
     logger.info("\n[4/4] 收集人气排名（整合雪球、东财、问财三大平台）")
-    wencai_ranks, xueqiu_ranks, eastmoney_ranks = collect_heat_ranks(top_rank)
+    wencai_ranks, xueqiu_ranks, eastmoney_ranks = collect_heat_ranks(wencai_fetcher, top_rank)
     review.heat_ranks = HeatRanker.calculate_composite_heat(
-        thsi_ranks=wencai_ranks,
+        wencai_ranks=wencai_ranks,
         xueqiu_ranks=xueqiu_ranks,
         eastmoney_ranks=eastmoney_ranks,
         top=top_rank,
-        wencai_ranks=wencai_ranks
     )
-    
+
+    # 缓存成功获取的数据
+    try:
+        cache['market'] = {k: v for k, v in review.market.__dict__.items() if not k.startswith('_')}
+        cache['volume_count'] = len(review.volume_history)
+        cache['surge_count'] = len(review.surge_stocks)
+        cache['heat_count'] = len(review.heat_ranks)
+        _save_cache(date, cache)
+    except Exception:
+        pass
+
     logger.info("\n" + "=" * 60)
     logger.info("复盘数据构建完成!")
     logger.info(f"大盘: 涨跌比={review.market.rise_fall_ratio:.2f}, 涨停{review.market.limit_up_count}只")
     logger.info(f"涨停股票: {len(review.surge_stocks)}只")
     logger.info(f"人气排名TOP50: 已计算")
     logger.info("=" * 60)
-    
+
     return review
 
 

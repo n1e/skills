@@ -4,9 +4,8 @@
 市场数据模型
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import List
 
 
 @dataclass
@@ -128,10 +127,3 @@ class VolumeData:
     """成交量数据"""
     date: str
     volume: float  # 元（成交额）
-
-
-@dataclass
-class VolumeHistory:
-    """成交量历史"""
-    date: str = ""
-    volumes: List[VolumeData] = field(default_factory=list)
