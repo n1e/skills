@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 问财数据采集器
-用于获取大盘数据、涨停股票、成交量历史等
-参考: skills/stock-heat-rank-py/main.py 中的实现
 
-注意：
-1. 优先使用问财官方 CLI (iwencai-skillhub-cli) 方式
-2. 保留 URL 访问方式作为备选
-3. 需要配置 IWENCAI_API_KEY 环境变量
+优先级：
+1. 官方 OpenAPI (https://openapi.iwencai.com/v1/query2data) - 优先
+2. CLI 方式 (iwencai-skillhub-cli) - 备选
+3. 旧 URL 访问方式 - 备选（仅当其他方式都不可用时）
+
+需要配置 IWENCAI_API_KEY 环境变量或在 config.json 中配置
 """
 
 import json
@@ -48,7 +48,7 @@ def _find_project_root() -> str:
 
 
 def find_hexin_v_js() -> str:
-    """查找hexin_v.js路径"""
+    """查找hexin_v.js路径（旧 URL 方式使用）"""
     root = _find_project_root()
     js_path = os.path.join(root, 'lib', 'hexin_v.js')
     if os.path.exists(js_path):
@@ -64,7 +64,8 @@ def get_wencai_config() -> Dict[str, Any]:
     config_dict = {
         'api_key': '',
         'skill_name': '财务数据查询',
-        'prefer_cli': True
+        'prefer_openapi': True,
+        'prefer_cli': True,
     }
     
     # 从环境变量读取
@@ -82,18 +83,140 @@ def get_wencai_config() -> Dict[str, Any]:
         if skill_name:
             config_dict['skill_name'] = skill_name
         
+        prefer_openapi = global_config.get('wencai.prefer_openapi', True)
+        config_dict['prefer_openapi'] = prefer_openapi
+        
         prefer_cli = global_config.get('wencai.prefer_cli', True)
         config_dict['prefer_cli'] = prefer_cli
     
     return config_dict
 
 
+class WencaiOpenAPIError(Exception):
+    """OpenAPI 错误异常类"""
+    def __init__(self, message: str, status_code: int = None, response: str = None):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.response = response
+
+
+class WencaiOpenAPI:
+    """
+    问财官方 OpenAPI 客户端
+    
+    使用 https://openapi.iwencai.com/v1/query2data 进行数据查询
+    这是当前优先使用的方式
+    
+    参考：基本资料查询 skill 中的实现
+    """
+    
+    DEFAULT_API_URL = "https://openapi.iwencai.com/v1/query2data"
+    DEFAULT_PAGE = "1"
+    DEFAULT_LIMIT = "10"
+    DEFAULT_IS_CACHE = "1"
+    DEFAULT_EXPAND_INDEX = "true"
+    
+    def __init__(self):
+        self._config = get_wencai_config()
+        self._api_key = self._config.get('api_key', '')
+        self._available = None
+    
+    def _check_available(self) -> bool:
+        """检查 OpenAPI 是否可用"""
+        if self._available is not None:
+            return self._available
+        
+        if not self._api_key:
+            logger.warning("IWENCAI_API_KEY 未配置，OpenAPI 不可用")
+            self._available = False
+            return False
+        
+        self._available = True
+        logger.info("问财 OpenAPI 可用")
+        return self._available
+    
+    def query(self, query: str, page: str = None, limit: str = None) -> Optional[Dict]:
+        """
+        使用 OpenAPI 执行查询
+        
+        Args:
+            query: 查询字符串
+            page: 分页参数
+            limit: 每页条数
+            
+        Returns:
+            包含 datas、code_count、chunks_info 等字段的字典，失败返回 None
+        """
+        if not self._check_available():
+            return None
+        
+        page = page or self.DEFAULT_PAGE
+        limit = limit or self.DEFAULT_LIMIT
+        
+        payload = {
+            "query": query,
+            "page": page,
+            "limit": limit,
+            "is_cache": self.DEFAULT_IS_CACHE,
+            "expand_index": self.DEFAULT_EXPAND_INDEX
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            logger.info(f"使用问财 OpenAPI 查询: {query} (page={page}, limit={limit})")
+            
+            resp = requests.post(
+                self.DEFAULT_API_URL,
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
+            
+            result = resp.json()
+            
+            # 检查响应
+            if isinstance(result, dict):
+                status_code = result.get("status_code", 0)
+                if status_code != 0:
+                    status_msg = result.get("status_msg", "未知错误")
+                    logger.warning(f"OpenAPI 返回错误: status_code={status_code}, msg={status_msg}")
+                    return None
+                
+                # 返回完整结果
+                return {
+                    "datas": result.get("datas", []),
+                    "code_count": result.get("code_count", 0),
+                    "chunks_info": result.get("chunks_info", {}),
+                    "status_code": 0
+                }
+            
+            return None
+            
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"OpenAPI 请求失败: {e}")
+            return None
+        except json.JSONDecodeError as e:
+            logger.warning(f"OpenAPI 响应解析失败: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"OpenAPI 查询异常: {e}")
+            return None
+    
+    def is_available(self) -> bool:
+        """检查 OpenAPI 是否完全可用"""
+        return self._check_available()
+
+
 class WencaiCLI:
     """
-    问财官方 CLI 客户端
+    问财官方 CLI 客户端（备选）
     
     使用 iwencai-skillhub-cli 进行数据查询
-    需要配置 IWENCAI_API_KEY 环境变量或在 config.json 中配置
     """
     
     def __init__(self):
@@ -179,13 +302,11 @@ class WencaiCLI:
         if not self._check_api_key():
             return None
         
-        # 确保技能已安装
         self._install_skill(skill_name)
         
         try:
             logger.info(f"使用问财 CLI 查询: {question}")
             
-            # 构建命令
             cmd = [
                 'iwencai-skillhub-cli',
                 'run',
@@ -194,7 +315,6 @@ class WencaiCLI:
                 question
             ]
             
-            # 设置环境变量
             env = os.environ.copy()
             env['IWENCAI_API_KEY'] = self._api_key
             
@@ -210,14 +330,12 @@ class WencaiCLI:
                 logger.warning(f"CLI 查询失败: {result.stderr}")
                 return None
             
-            # 尝试解析 JSON 输出
             output = result.stdout.strip()
             try:
                 data = json.loads(output)
                 logger.info("CLI 查询成功")
                 return data
             except json.JSONDecodeError:
-                # 如果不是 JSON，尝试直接返回文本
                 logger.warning(f"CLI 输出不是 JSON: {output[:200]}")
                 return {'raw_output': output}
                 
@@ -230,25 +348,14 @@ class WencaiCLI:
         return self._check_cli_available() and self._check_api_key()
 
 
-class WencaiFetcher:
+class WencaiOldURL:
     """
-    问财数据采集器
+    旧 URL 访问方式（备选）
     
-    优先级（可通过配置控制）：
-    1. 问财官方 CLI (iwencai-skillhub-cli) - 优先（当 prefer_cli=True 且 CLI 可用时）
-    2. URL 访问方式（保留作为备选）
+    仅当 OpenAPI 和 CLI 都不可用时使用
     """
     
     def __init__(self):
-        # 加载配置
-        self._config = get_wencai_config()
-        self._prefer_cli = self._config.get('prefer_cli', True)
-        self._skill_name = self._config.get('skill_name', '财务数据查询')
-        
-        # CLI 客户端
-        self._cli = WencaiCLI()
-        
-        # URL 访问方式的参数（保留作为备选）
         self.session = requests.Session()
         self.other_uid = f"Ths_iwencai_Xuangu_{rand_string(32)}"
         self.cookies = {
@@ -259,7 +366,7 @@ class WencaiFetcher:
         self.js_path = find_hexin_v_js()
     
     def _generate_hexin_v(self) -> str:
-        """生成Hexin-V签名（URL 访问方式使用）"""
+        """生成Hexin-V签名"""
         timestamp = f"{time.time():.3f}"
         try:
             result = subprocess.run(
@@ -274,7 +381,7 @@ class WencaiFetcher:
             return "default_hexin_v_value"
     
     def _visit_main(self):
-        """访问主页获取初始cookies（URL 访问方式使用）"""
+        """访问主页获取初始cookies"""
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -288,7 +395,7 @@ class WencaiFetcher:
             pass
     
     def _visit_search(self):
-        """访问搜索页（URL 访问方式使用）"""
+        """访问搜索页"""
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -303,7 +410,7 @@ class WencaiFetcher:
             pass
     
     def _visit_hint(self):
-        """初始化会话（URL 访问方式使用）"""
+        """初始化会话"""
         hexin_v = self._generate_hexin_v()
         self.cookies['v'] = hexin_v
         
@@ -335,7 +442,7 @@ class WencaiFetcher:
             pass
     
     def _init_session(self):
-        """初始化问财会话（URL 访问方式使用）"""
+        """初始化问财会话"""
         logger.info("→ 访问问财主页...")
         self._visit_main()
         time.sleep(0.3)
@@ -349,25 +456,9 @@ class WencaiFetcher:
         time.sleep(0.3)
     
     def query(self, question: str, perpage: int = 10) -> dict:
-        """
-        执行问财查询
+        """使用旧 URL 方式执行查询"""
+        self._init_session()
         
-        优先级（可通过配置控制）：
-        1. 问财官方 CLI (当 prefer_cli=True 且 CLI 可用时)
-        2. URL 访问方式（保留作为备选）
-        """
-        # 如果配置优先使用 CLI 且 CLI 可用，则使用 CLI
-        if self._prefer_cli and self._cli.is_available():
-            result = self._cli.query(question, skill_name=self._skill_name)
-            if result:
-                return result
-        
-        # 否则使用 URL 访问方式
-        logger.info("使用 URL 访问方式查询...")
-        return self._query_url(question, perpage)
-    
-    def _query_url(self, question: str, perpage: int = 10) -> dict:
-        """使用 URL 访问方式执行查询"""
         hexin_v = self._generate_hexin_v()
         self.cookies['v'] = hexin_v
         
@@ -405,20 +496,139 @@ class WencaiFetcher:
             )
             return resp.json()
         except Exception as e:
-            logger.error(f"URL 查询失败: {e}")
+            logger.error(f"旧 URL 查询失败: {e}")
             return {}
+
+
+class WencaiFetcher:
+    """
+    问财数据采集器
+    
+    优先级：
+    1. 官方 OpenAPI (https://openapi.iwencai.com/v1/query2data) - 优先
+    2. CLI 方式 (iwencai-skillhub-cli) - 备选
+    3. 旧 URL 访问方式 - 备选
+    """
+    
+    def __init__(self):
+        self._config = get_wencai_config()
+        self._prefer_openapi = self._config.get('prefer_openapi', True)
+        self._prefer_cli = self._config.get('prefer_cli', True)
+        self._skill_name = self._config.get('skill_name', '财务数据查询')
+        
+        # OpenAPI 客户端（优先）
+        self._openapi = WencaiOpenAPI()
+        
+        # CLI 客户端（备选）
+        self._cli = WencaiCLI()
+        
+        # 旧 URL 客户端（备选）
+        self._old_url = WencaiOldURL()
+    
+    def query(self, question: str, perpage: int = 100) -> dict:
+        """
+        执行问财查询
+        
+        优先级：
+        1. OpenAPI（如果配置了 API_KEY）
+        2. CLI
+        3. 旧 URL
+        
+        Args:
+            question: 查询问题
+            perpage: 每页条数（用于 OpenAPI 和旧 URL）
+            
+        Returns:
+            查询结果字典
+        """
+        # 1. 优先使用 OpenAPI
+        if self._prefer_openapi and self._openapi.is_available():
+            result = self._openapi.query(question, limit=str(perpage))
+            if result:
+                # 转换为标准格式
+                return self._convert_openapi_result(result)
+        
+        # 2. 使用 CLI
+        if self._prefer_cli and self._cli.is_available():
+            result = self._cli.query(question, skill_name=self._skill_name)
+            if result and 'raw_output' not in result:
+                return result
+        
+        # 3. 使用旧 URL
+        logger.info("使用旧 URL 访问方式查询...")
+        return self._old_url.query(question, perpage)
+    
+    def _convert_openapi_result(self, openapi_result: Dict) -> Dict:
+        """
+        将 OpenAPI 返回结果转换为旧 URL 方式的格式
+        
+        OpenAPI 返回格式：
+        {
+            "datas": [...],
+            "code_count": N,
+            "chunks_info": {},
+            "status_code": 0
+        }
+        
+        旧 URL 返回格式：
+        {
+            "errno": 0,
+            "data": {
+                "answer": [
+                    {
+                        "txt": [
+                            {
+                                "content": {
+                                    "components": [
+                                        {
+                                            "data": {
+                                                "datas": [...]
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        """
+        datas = openapi_result.get('datas', [])
+        
+        return {
+            "errno": 0,
+            "status_code": 0,
+            "data": {
+                "answer": [
+                    {
+                        "txt": [
+                            {
+                                "content": {
+                                    "components": [
+                                        {
+                                            "data": {
+                                                "datas": datas
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
     
     def _parse_answer(self, data: dict) -> List[dict]:
         """解析问财返回数据"""
         if not data:
             return []
         
-        # 检查 CLI 返回的原始输出
         if 'raw_output' in data:
             logger.warning("CLI 返回原始输出，无法解析")
             return []
         
-        # 标准问财返回格式
         status = data.get('errno', data.get('status_code', -1))
         if status != 0:
             logger.warning(f"问财返回错误码: {status}")
@@ -468,62 +678,43 @@ class WencaiFetcher:
         volumes = []
         
         try:
-            self._init_session()
-            result = self.query(f"A股总成交金额 最近{days}个交易日", perpage=days)
+            result = self.query(f"同花顺全A成交金额 最近{days}个交易日", perpage=days)
             
-            # 检查是否需要验证码
             if isinstance(result, dict):
                 captcha_url = result.get('data', {}).get('captcha_url')
                 if captcha_url:
                     logger.warning("问财 API 返回验证码要求，数据获取失败")
                     return []
             
-            try:
-                answer = result.get('data', {}).get('answer', [])
-                if answer and len(answer) > 0:
-                    txt_list = answer[0].get('txt', [])
-                    if txt_list and isinstance(txt_list, list) and len(txt_list) > 0:
-                        first_item = txt_list[0]
-                        if isinstance(first_item, dict):
-                            content = first_item.get('content', {})
-                            if isinstance(content, dict):
-                                components = content.get('components', [])
-                                if isinstance(components, list):
-                                    for comp in components:
-                                        if isinstance(comp, dict):
-                                            comp_data = comp.get('data', {})
-                                            if isinstance(comp_data, dict):
-                                                datas = comp_data.get('datas', [])
-                                                if isinstance(datas, list) and len(datas) > 0:
-                                                    for item in datas:
-                                                        if isinstance(item, dict):
-                                                            date_str = item.get('时间区间', item.get('date', ''))
-                                                            amount = item.get('成交额', item.get('A股总成交金额', item.get('amount', 0)))
-                                                            
-                                                            if date_str and amount:
-                                                                date_str = str(date_str)
-                                                                if len(date_str) == 8:
-                                                                    date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-                                                                
-                                                                if isinstance(amount, str):
-                                                                    if '万亿' in amount:
-                                                                        amount = float(amount.replace('万亿', '')) * 1000000000000
-                                                                    elif '亿' in amount:
-                                                                        amount = float(amount.replace('亿', '')) * 100000000
-                                                                    elif '万' in amount:
-                                                                        amount = float(amount.replace('万', '')) * 10000
-                                                                    else:
-                                                                        amount = float(amount.replace(',', ''))
-                                                                
-                                                                volumes.append(VolumeData(
-                                                                    date=str(date_str),
-                                                                    volume=float(amount)
-                                                                ))
-                                                                logger.info(f"提取到 {date_str}: {amount:,.0f}元")
-            except Exception as e:
-                import traceback
-                logger.warning(f"解析成交额数据失败: {e}")
-                logger.warning(traceback.format_exc())
+            datas = self._parse_answer(result)
+            
+            for item in datas:
+                date_str = item.get('时间区间', item.get('date', ''))
+                amount = item.get('成交额', item.get('同花顺全A成交金额', item.get('amount', 0)))
+                
+                if date_str and amount:
+                    date_str = str(date_str)
+                    if len(date_str) == 8:
+                        date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                    
+                    if isinstance(amount, str):
+                        if '万亿' in amount:
+                            amount = float(amount.replace('万亿', '')) * 1000000000000
+                        elif '亿' in amount:
+                            amount = float(amount.replace('亿', '')) * 100000000
+                        elif '万' in amount:
+                            amount = float(amount.replace('万', '')) * 10000
+                        else:
+                            try:
+                                amount = float(amount.replace(',', ''))
+                            except ValueError:
+                                continue
+                    
+                    volumes.append(VolumeData(
+                        date=str(date_str),
+                        volume=float(amount)
+                    ))
+                    logger.info(f"提取到 {date_str}: {float(amount):,.0f}元")
             
             logger.info(f"获取到 {len(volumes)} 日成交额数据")
         except Exception as e:
@@ -537,7 +728,6 @@ class WencaiFetcher:
         stocks = []
         
         try:
-            self._init_session()
             result = self.query(f"今日涨停股", perpage=max_stocks)
             
             if isinstance(result, dict):
@@ -592,7 +782,6 @@ class WencaiFetcher:
         ranks = []
         
         try:
-            self._init_session()
             result = self.query(f"人气排名前{top}", perpage=top)
             
             if isinstance(result, dict):
