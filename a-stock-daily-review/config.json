@@ -14,5 +14,11 @@
   },
   "volume_history": {
     "days": 30
+  },
+  "wencai": {
+    "api_key": "sk-proj-00",
+    "skill_name": "基本资料查询",
+    "prefer_openapi": true,
+    "prefer_cli": true
   }
 }
