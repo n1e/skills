@@ -14,5 +14,10 @@
   },
   "volume_history": {
     "days": 30
+  },
+  "wencai": {
+    "api_key": "",
+    "skill_name": "财务数据查询",
+    "prefer_cli": true
   }
 }

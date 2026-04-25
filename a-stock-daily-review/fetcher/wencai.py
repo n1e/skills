@@ -5,17 +5,19 @@
 用于获取大盘数据、涨停股票、成交量历史等
 参考: skills/stock-heat-rank-py/main.py 中的实现
 
-注意：问财 API 可能需要验证码验证。
-当问财不可用时，会自动使用 akshare 作为回退数据源。
+注意：
+1. 优先使用问财官方 CLI (iwencai-skillhub-cli) 方式
+2. 保留 URL 访问方式作为备选
+3. 需要配置 IWENCAI_API_KEY 环境变量
 """
 
+import json
 import os
 import re
 import subprocess
 import sys
 import time
 import urllib.parse
-from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 import requests
@@ -26,133 +28,10 @@ from utils.helpers import rand_string
 from models.market import VolumeData
 from models.stock import SurgeStock, HeatRank
 
-
-class AKShareFallback:
-    """AKShare 回退数据源
-    当问财 API 不可用时使用
-    """
-    
-    def __init__(self):
-        self._akshare_available = None
-        self._ak = None
-    
-    def _check_akshare(self) -> bool:
-        """检查 akshare 是否可用"""
-        if self._akshare_available is not None:
-            return self._akshare_available
-        
-        try:
-            import akshare as ak
-            self._ak = ak
-            self._akshare_available = True
-            logger.info("AKShare 可用，将作为问财的回退数据源")
-            return True
-        except ImportError:
-            self._akshare_available = False
-            logger.warning("AKShare 未安装，问财失败时将无法获取数据")
-            return False
-    
-    def get_limit_up_stocks(self, trade_date: str = None, min_change: float = 9.5) -> List[SurgeStock]:
-        """
-        使用 akshare 获取涨停股票
-        
-        Args:
-            trade_date: 交易日期，格式为 'YYYYMMDD'，默认为今天
-            min_change: 最小涨幅阈值
-            
-        Returns:
-            涨停股票列表
-        """
-        if not self._check_akshare():
-            return []
-        
-        try:
-            if trade_date is None:
-                trade_date = datetime.now().strftime('%Y%m%d')
-            
-            logger.info(f"使用 AKShare 获取 {trade_date} 涨停股票...")
-            
-            df = self._ak.stock_zt_pool_em(date=trade_date)
-            
-            if df is None or len(df) == 0:
-                logger.warning("AKShare 获取涨停股票数据为空")
-                return []
-            
-            stocks = []
-            for _, row in df.iterrows():
-                code = str(row.get('代码', ''))
-                name = str(row.get('名称', ''))
-                price = float(row.get('最新价', 0))
-                change_pct = float(row.get('涨跌幅', 0))
-                reason = str(row.get('涨停原因类别', row.get('涨停原因', '')))
-                
-                if change_pct >= min_change:
-                    stocks.append(SurgeStock(
-                        code=code,
-                        name=name,
-                        price=price,
-                        change_pct=change_pct,
-                        reason=reason
-                    ))
-            
-            logger.info(f"AKShare 获取到 {len(stocks)} 只涨停股")
-            return stocks
-            
-        except Exception as e:
-            logger.error(f"AKShare 获取涨停股票失败: {e}")
-            return []
-    
-    def get_volume_history(self, days: int = 30) -> List[VolumeData]:
-        """
-        使用 akshare 获取成交量历史
-        注意：akshare 没有直接的大盘成交量历史接口，这里使用上证指数成交量作为近似
-        
-        Args:
-            days: 获取天数
-            
-        Returns:
-            成交量数据列表
-        """
-        if not self._check_akshare():
-            return []
-        
-        try:
-            logger.info(f"使用 AKShare 获取最近 {days} 日上证指数成交量...")
-            
-            end_date = datetime.now().strftime('%Y%m%d')
-            start_date = (datetime.now().replace(day=1) - __import__('datetime').timedelta(days=days*2)).strftime('%Y%m%d')
-            
-            df = self._ak.stock_zh_a_hist(
-                symbol="000001",
-                period="daily",
-                start_date=start_date,
-                end_date=end_date,
-                adjust=""
-            )
-            
-            if df is None or len(df) == 0:
-                logger.warning("AKShare 获取上证指数数据为空")
-                return []
-            
-            volumes = []
-            recent_days = df.tail(days)
-            
-            for _, row in recent_days.iterrows():
-                date_str = str(row.get('日期', ''))
-                volume = float(row.get('成交量', 0))
-                
-                if date_str and volume > 0:
-                    volumes.append(VolumeData(
-                        date=date_str,
-                        volume=volume
-                    ))
-            
-            logger.info(f"AKShare 获取到 {len(volumes)} 日成交量数据")
-            return volumes
-            
-        except Exception as e:
-            logger.error(f"AKShare 获取成交量历史失败: {e}")
-            return []
+try:
+    from config import config as global_config
+except ImportError:
+    global_config = None
 
 
 def _find_project_root() -> str:
@@ -177,13 +56,199 @@ def find_hexin_v_js() -> str:
     return 'lib/hexin_v.js'
 
 
-class WencaiFetcher:
-    """问财数据采集器 - 参考stock-heat-rank-py实现
+def get_wencai_config() -> Dict[str, Any]:
+    """获取问财配置
     
-    当问财 API 不可用时（如需要验证码），会自动使用 AKShare 作为回退数据源。
+    优先从环境变量读取，然后从 config.json 读取
+    """
+    config_dict = {
+        'api_key': '',
+        'skill_name': '财务数据查询',
+        'prefer_cli': True
+    }
+    
+    # 从环境变量读取
+    env_api_key = os.environ.get('IWENCAI_API_KEY', '')
+    if env_api_key:
+        config_dict['api_key'] = env_api_key
+    
+    # 从 config.json 读取
+    if global_config:
+        json_api_key = global_config.get('wencai.api_key', '')
+        if json_api_key and not config_dict['api_key']:
+            config_dict['api_key'] = json_api_key
+        
+        skill_name = global_config.get('wencai.skill_name', '')
+        if skill_name:
+            config_dict['skill_name'] = skill_name
+        
+        prefer_cli = global_config.get('wencai.prefer_cli', True)
+        config_dict['prefer_cli'] = prefer_cli
+    
+    return config_dict
+
+
+class WencaiCLI:
+    """
+    问财官方 CLI 客户端
+    
+    使用 iwencai-skillhub-cli 进行数据查询
+    需要配置 IWENCAI_API_KEY 环境变量或在 config.json 中配置
     """
     
     def __init__(self):
+        self._config = get_wencai_config()
+        self._api_key = self._config.get('api_key', '')
+        self._cli_available = None
+        self._installed_skills = set()
+    
+    def _check_cli_available(self) -> bool:
+        """检查 CLI 是否可用"""
+        if self._cli_available is not None:
+            return self._cli_available
+        
+        try:
+            result = subprocess.run(
+                ['iwencai-skillhub-cli', '--help'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            self._cli_available = result.returncode == 0
+            if self._cli_available:
+                logger.info("问财 CLI 可用")
+            else:
+                logger.warning("问财 CLI 不可用")
+        except FileNotFoundError:
+            self._cli_available = False
+            logger.warning("问财 CLI 未安装")
+        except Exception as e:
+            self._cli_available = False
+            logger.warning(f"检查问财 CLI 失败: {e}")
+        
+        return self._cli_available
+    
+    def _check_api_key(self) -> bool:
+        """检查 API Key 是否配置"""
+        if not self._api_key:
+            logger.warning("IWENCAI_API_KEY 未配置（请设置环境变量或在 config.json 中配置）")
+            return False
+        return True
+    
+    def _install_skill(self, skill_name: str) -> bool:
+        """安装技能"""
+        if skill_name in self._installed_skills:
+            return True
+        
+        if not self._check_cli_available():
+            return False
+        
+        try:
+            logger.info(f"安装问财技能: {skill_name}")
+            result = subprocess.run(
+                ['iwencai-skillhub-cli', 'install', skill_name],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            if result.returncode == 0:
+                self._installed_skills.add(skill_name)
+                logger.info(f"技能 {skill_name} 安装成功")
+                return True
+            else:
+                logger.warning(f"技能 {skill_name} 安装失败: {result.stderr}")
+                return False
+        except Exception as e:
+            logger.warning(f"安装技能失败: {e}")
+            return False
+    
+    def query(self, question: str, skill_name: str = "财务数据查询") -> Optional[Dict]:
+        """
+        使用 CLI 执行查询
+        
+        Args:
+            question: 查询问题
+            skill_name: 技能名称
+            
+        Returns:
+            查询结果字典，失败返回 None
+        """
+        if not self._check_cli_available():
+            return None
+        
+        if not self._check_api_key():
+            return None
+        
+        # 确保技能已安装
+        self._install_skill(skill_name)
+        
+        try:
+            logger.info(f"使用问财 CLI 查询: {question}")
+            
+            # 构建命令
+            cmd = [
+                'iwencai-skillhub-cli',
+                'run',
+                skill_name,
+                '--question',
+                question
+            ]
+            
+            # 设置环境变量
+            env = os.environ.copy()
+            env['IWENCAI_API_KEY'] = self._api_key
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=env
+            )
+            
+            if result.returncode != 0:
+                logger.warning(f"CLI 查询失败: {result.stderr}")
+                return None
+            
+            # 尝试解析 JSON 输出
+            output = result.stdout.strip()
+            try:
+                data = json.loads(output)
+                logger.info("CLI 查询成功")
+                return data
+            except json.JSONDecodeError:
+                # 如果不是 JSON，尝试直接返回文本
+                logger.warning(f"CLI 输出不是 JSON: {output[:200]}")
+                return {'raw_output': output}
+                
+        except Exception as e:
+            logger.warning(f"CLI 查询异常: {e}")
+            return None
+    
+    def is_available(self) -> bool:
+        """检查 CLI 是否完全可用"""
+        return self._check_cli_available() and self._check_api_key()
+
+
+class WencaiFetcher:
+    """
+    问财数据采集器
+    
+    优先级（可通过配置控制）：
+    1. 问财官方 CLI (iwencai-skillhub-cli) - 优先（当 prefer_cli=True 且 CLI 可用时）
+    2. URL 访问方式（保留作为备选）
+    """
+    
+    def __init__(self):
+        # 加载配置
+        self._config = get_wencai_config()
+        self._prefer_cli = self._config.get('prefer_cli', True)
+        self._skill_name = self._config.get('skill_name', '财务数据查询')
+        
+        # CLI 客户端
+        self._cli = WencaiCLI()
+        
+        # URL 访问方式的参数（保留作为备选）
         self.session = requests.Session()
         self.other_uid = f"Ths_iwencai_Xuangu_{rand_string(32)}"
         self.cookies = {
@@ -192,42 +257,9 @@ class WencaiFetcher:
             'v': ''
         }
         self.js_path = find_hexin_v_js()
-        self._fallback = AKShareFallback()
-        self._wencai_available = None
-    
-    def _check_wencai_available(self) -> bool:
-        """检查问财 API 是否可用"""
-        if self._wencai_available is not None:
-            return self._wencai_available
-        
-        try:
-            logger.info("检查问财 API 是否可用...")
-            self._init_session()
-            result = self.query("上证指数", perpage=1)
-            
-            if isinstance(result, dict):
-                captcha_url = result.get('data', {}).get('captcha_url')
-                if captcha_url:
-                    logger.warning("问财 API 需要验证码验证，将使用 AKShare 作为回退数据源")
-                    self._wencai_available = False
-                    return False
-                
-                errno = result.get('errno', result.get('status_code', -1))
-                if errno == 0:
-                    logger.info("问财 API 可用")
-                    self._wencai_available = True
-                    return True
-            
-            self._wencai_available = False
-            return False
-            
-        except Exception as e:
-            logger.warning(f"问财 API 检查失败: {e}，将使用 AKShare 作为回退数据源")
-            self._wencai_available = False
-            return False
     
     def _generate_hexin_v(self) -> str:
-        """生成Hexin-V签名"""
+        """生成Hexin-V签名（URL 访问方式使用）"""
         timestamp = f"{time.time():.3f}"
         try:
             result = subprocess.run(
@@ -242,7 +274,7 @@ class WencaiFetcher:
             return "default_hexin_v_value"
     
     def _visit_main(self):
-        """访问主页获取初始cookies"""
+        """访问主页获取初始cookies（URL 访问方式使用）"""
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -256,7 +288,7 @@ class WencaiFetcher:
             pass
     
     def _visit_search(self):
-        """访问搜索页"""
+        """访问搜索页（URL 访问方式使用）"""
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -271,9 +303,8 @@ class WencaiFetcher:
             pass
     
     def _visit_hint(self):
-        """初始化会话"""
+        """初始化会话（URL 访问方式使用）"""
         hexin_v = self._generate_hexin_v()
-        # 更新cookies中的v值为hexin_v
         self.cookies['v'] = hexin_v
         
         headers = {
@@ -304,7 +335,7 @@ class WencaiFetcher:
             pass
     
     def _init_session(self):
-        """初始化问财会话（参考stock-heat-rank-py实现）"""
+        """初始化问财会话（URL 访问方式使用）"""
         logger.info("→ 访问问财主页...")
         self._visit_main()
         time.sleep(0.3)
@@ -318,9 +349,26 @@ class WencaiFetcher:
         time.sleep(0.3)
     
     def query(self, question: str, perpage: int = 10) -> dict:
-        """执行问财查询"""
+        """
+        执行问财查询
+        
+        优先级（可通过配置控制）：
+        1. 问财官方 CLI (当 prefer_cli=True 且 CLI 可用时)
+        2. URL 访问方式（保留作为备选）
+        """
+        # 如果配置优先使用 CLI 且 CLI 可用，则使用 CLI
+        if self._prefer_cli and self._cli.is_available():
+            result = self._cli.query(question, skill_name=self._skill_name)
+            if result:
+                return result
+        
+        # 否则使用 URL 访问方式
+        logger.info("使用 URL 访问方式查询...")
+        return self._query_url(question, perpage)
+    
+    def _query_url(self, question: str, perpage: int = 10) -> dict:
+        """使用 URL 访问方式执行查询"""
         hexin_v = self._generate_hexin_v()
-        # 更新cookies中的v值为hexin_v
         self.cookies['v'] = hexin_v
         
         payload = {
@@ -347,17 +395,30 @@ class WencaiFetcher:
             'Hexin-V': hexin_v,
         }
         
-        resp = self.session.post(
-            'https://www.iwencai.com/customized/chart/get-robot-data',
-            headers=headers,
-            json=payload,
-            cookies=self.cookies,
-            timeout=30
-        )
-        return resp.json()
+        try:
+            resp = self.session.post(
+                'https://www.iwencai.com/customized/chart/get-robot-data',
+                headers=headers,
+                json=payload,
+                cookies=self.cookies,
+                timeout=30
+            )
+            return resp.json()
+        except Exception as e:
+            logger.error(f"URL 查询失败: {e}")
+            return {}
     
     def _parse_answer(self, data: dict) -> List[dict]:
         """解析问财返回数据"""
+        if not data:
+            return []
+        
+        # 检查 CLI 返回的原始输出
+        if 'raw_output' in data:
+            logger.warning("CLI 返回原始输出，无法解析")
+            return []
+        
+        # 标准问财返回格式
         status = data.get('errno', data.get('status_code', -1))
         if status != 0:
             logger.warning(f"问财返回错误码: {status}")
@@ -372,25 +433,20 @@ class WencaiFetcher:
             if not txt_list:
                 return []
             
-            # txt_list可能是列表或直接包含content
             if isinstance(txt_list, list) and len(txt_list) > 0:
                 first_item = txt_list[0]
-                # 如果是字符串列表，直接返回
                 if isinstance(first_item, str):
                     return [{'result': first_item}]
-                # 如果是字典，检查是否有content
                 if isinstance(first_item, dict):
                     if 'content' in first_item:
                         content = first_item.get('content', {})
                     else:
-                        # 直接是数据
                         return txt_list
                     
                     components = content.get('components', [])
                     if not components:
                         return []
                     
-                    # 组件可能是列表或直接包含data
                     first_component = components[0]
                     if 'data' in first_component:
                         comp_data = first_component.get('data', {})
@@ -407,34 +463,21 @@ class WencaiFetcher:
             return []
     
     def get_volume_history(self, days: int = 30) -> List[VolumeData]:
-        """获取指定天数的成交额历史（使用A股总成交金额，单位：元）
-        
-        优先使用问财 API，如果问财不可用则使用 AKShare 作为回退。
-        """
+        """获取指定天数的成交额历史（使用A股总成交金额，单位：元）"""
         logger.info(f"获取最近{days}日成交额历史")
-        
-        if not self._check_wencai_available():
-            logger.info("使用 AKShare 回退数据源获取成交量历史")
-            return self._fallback.get_volume_history(days)
-        
         volumes = []
         
         try:
-            # 初始化会话
             self._init_session()
-            
-            # 使用用户提供的查询语句
             result = self.query(f"A股总成交金额 最近{days}个交易日", perpage=days)
             
             # 检查是否需要验证码
             if isinstance(result, dict):
                 captcha_url = result.get('data', {}).get('captcha_url')
                 if captcha_url:
-                    logger.warning("问财 API 返回验证码要求，切换到 AKShare 回退数据源")
-                    self._wencai_available = False
-                    return self._fallback.get_volume_history(days)
+                    logger.warning("问财 API 返回验证码要求，数据获取失败")
+                    return []
             
-            # 直接从返回数据中提取
             try:
                 answer = result.get('data', {}).get('answer', [])
                 if answer and len(answer) > 0:
@@ -452,20 +495,16 @@ class WencaiFetcher:
                                             if isinstance(comp_data, dict):
                                                 datas = comp_data.get('datas', [])
                                                 if isinstance(datas, list) and len(datas) > 0:
-                                                    # 遍历所有数据项
                                                     for item in datas:
                                                         if isinstance(item, dict):
-                                                            # 提取日期和成交额
                                                             date_str = item.get('时间区间', item.get('date', ''))
                                                             amount = item.get('成交额', item.get('A股总成交金额', item.get('amount', 0)))
                                                             
                                                             if date_str and amount:
-                                                                # 格式化日期（date_str可能是int类型如20250407）
                                                                 date_str = str(date_str)
                                                                 if len(date_str) == 8:
                                                                     date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
                                                                 
-                                                                # 解析成交额（可能是字符串如"1.23万亿"）
                                                                 if isinstance(amount, str):
                                                                     if '万亿' in amount:
                                                                         amount = float(amount.replace('万亿', '')) * 1000000000000
@@ -488,54 +527,40 @@ class WencaiFetcher:
             
             logger.info(f"获取到 {len(volumes)} 日成交额数据")
         except Exception as e:
-            logger.error(f"成交额历史查询失败: {e}，尝试使用 AKShare 回退数据源")
-            return self._fallback.get_volume_history(days)
+            logger.error(f"成交额历史查询失败: {e}")
         
         return volumes
     
     def get_surge_stocks(self, min_change: float = 9.5, max_stocks: int = 200) -> List[SurgeStock]:
-        """获取涨停股票列表
-        
-        优先使用问财 API，如果问财不可用则使用 AKShare 作为回退。
-        """
+        """获取涨停股票列表"""
         logger.info(f"获取涨停股票（最低涨幅{min_change}%）")
-        
-        if not self._check_wencai_available():
-            logger.info("使用 AKShare 回退数据源获取涨停股票")
-            return self._fallback.get_limit_up_stocks(min_change=min_change)
-        
         stocks = []
         
         try:
+            self._init_session()
             result = self.query(f"今日涨停股", perpage=max_stocks)
             
-            # 检查是否需要验证码
             if isinstance(result, dict):
                 captcha_url = result.get('data', {}).get('captcha_url')
                 if captcha_url:
-                    logger.warning("问财 API 返回验证码要求，切换到 AKShare 回退数据源")
-                    self._wencai_available = False
-                    return self._fallback.get_limit_up_stocks(min_change=min_change)
+                    logger.warning("问财 API 返回验证码要求，数据获取失败")
+                    return []
             
             datas = self._parse_answer(result)
             
             for item in datas:
-                # 兼容多种字段名称
                 code = item.get('股票代码', item.get('code', ''))
                 name = item.get('股票简称', item.get('名称', ''))
                 price = item.get('最新价', item.get('收盘价', 0))
                 change_pct = item.get('最新涨跌幅', item.get('涨跌幅', item.get('涨幅', 0)))
                 
-                # 涨停原因（兼容多种字段名）
                 reason = item.get('涨停原因类别', item.get('涨停原因', item.get('涨停理由', '')))
-                # 处理带日期的字段名如 "涨停原因类别[20260403]"
                 if not reason:
                     for key in item:
                         if '涨停原因' in key or '涨停理由' in key:
                             reason = item[key]
                             break
                 
-                # 标准化代码
                 code_str = str(code)
                 if '.' in code_str:
                     code_str = code_str.split('.')[0]
@@ -556,37 +581,24 @@ class WencaiFetcher:
             
             logger.info(f"获取到 {len(stocks)} 只涨停股")
         except Exception as e:
-            logger.error(f"涨停股票查询失败: {e}，尝试使用 AKShare 回退数据源")
-            return self._fallback.get_limit_up_stocks(min_change=min_change)
+            logger.error(f"涨停股票查询失败: {e}")
         
         return stocks
     
     def get_heat_rank(self, top: int = 50) -> List[HeatRank]:
-        """获取问财人气排名（参考stock-heat-rank-py实现）
-        
-        优先使用问财 API，如果问财不可用则返回空列表。
-        人气排名还有雪球和东方财富作为替代数据源。
-        """
+        """获取问财人气排名"""
         logger.info(f"获取问财人气排名TOP{top}")
-        
-        if not self._check_wencai_available():
-            logger.info("问财 API 不可用，人气排名将使用雪球和东方财富数据")
-            return []
         
         ranks = []
         
         try:
-            # 初始化会话
             self._init_session()
-            
             result = self.query(f"人气排名前{top}", perpage=top)
             
-            # 检查是否需要验证码
             if isinstance(result, dict):
                 captcha_url = result.get('data', {}).get('captcha_url')
                 if captcha_url:
-                    logger.warning("问财 API 返回验证码要求，人气排名将使用雪球和东方财富数据")
-                    self._wencai_available = False
+                    logger.warning("问财 API 返回验证码要求，人气排名获取失败")
                     return []
             
             datas = self._parse_answer(result)
@@ -595,11 +607,9 @@ class WencaiFetcher:
                 code = item.get('股票代码', item.get('code', ''))
                 name = item.get('股票简称', item.get('name', ''))
                 if code and name:
-                    # 标准化股票代码，去掉.SZ/.SH后缀
                     code_str = str(code)
                     if '.' in code_str:
                         code_str = code_str.split('.')[0]
-                    # 只保留6位数字代码
                     if len(code_str) == 6 and code_str.isdigit():
                         ranks.append(HeatRank(
                             code=code_str,
@@ -611,6 +621,6 @@ class WencaiFetcher:
             
             logger.info(f"问财获取到 {len(ranks)} 只股票")
         except Exception as e:
-            logger.error(f"问财人气排名获取失败: {e}，将使用雪球和东方财富数据")
+            logger.error(f"问财人气排名获取失败: {e}")
         
         return ranks
