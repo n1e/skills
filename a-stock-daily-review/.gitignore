@@ -25,6 +25,8 @@ env/
 output/
 *.md.bak
 
+temp_download
+
 # 日志
 *.log
 

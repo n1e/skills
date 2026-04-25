@@ -673,12 +673,16 @@ class WencaiFetcher:
             return []
     
     def get_volume_history(self, days: int = 30) -> List[VolumeData]:
-        """获取指定天数的成交额历史（使用A股总成交金额，单位：元）"""
+        """获取指定天数的成交额历史（使用A股总成交金额，单位：元）
+        
+        注意：OpenAPI 返回的数据格式是单条记录中包含多个日期的成交额字段，
+        字段名格式为：成交额[YYYYMMDD]
+        """
         logger.info(f"获取最近{days}日成交额历史")
         volumes = []
         
         try:
-            result = self.query(f"同花顺全A成交金额 最近{days}个交易日", perpage=days)
+            result = self.query(f"同花顺全A 日成交额 最近{days}日", perpage=days)
             
             if isinstance(result, dict):
                 captcha_url = result.get('data', {}).get('captcha_url')
@@ -688,37 +692,89 @@ class WencaiFetcher:
             
             datas = self._parse_answer(result)
             
+            # 模式1：OpenAPI 返回的格式 - 单条记录中包含多个日期字段
+            # 字段名格式：成交额[20260424], 成交额[20260423], ...
+            date_field_pattern = re.compile(r'成交额\[(\d{8})\]')
+            
             for item in datas:
-                date_str = item.get('时间区间', item.get('date', ''))
-                amount = item.get('成交额', item.get('同花顺全A成交金额', item.get('amount', 0)))
-                
-                if date_str and amount:
-                    date_str = str(date_str)
-                    if len(date_str) == 8:
-                        date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-                    
-                    if isinstance(amount, str):
-                        if '万亿' in amount:
-                            amount = float(amount.replace('万亿', '')) * 1000000000000
-                        elif '亿' in amount:
-                            amount = float(amount.replace('亿', '')) * 100000000
-                        elif '万' in amount:
-                            amount = float(amount.replace('万', '')) * 10000
+                # 首先尝试解析 OpenAPI 格式（字段名中包含日期）
+                has_date_in_fields = False
+                for key, value in item.items():
+                    match = date_field_pattern.match(key)
+                    if match:
+                        has_date_in_fields = True
+                        date_str = match.group(1)
+                        # 格式化日期：YYYYMMDD -> YYYY-MM-DD
+                        formatted_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                        
+                        # 处理成交额
+                        if isinstance(value, (int, float)):
+                            amount = float(value)
+                        elif isinstance(value, str):
+                            if '万亿' in value:
+                                amount = float(value.replace('万亿', '')) * 1000000000000
+                            elif '亿' in value:
+                                amount = float(value.replace('亿', '')) * 100000000
+                            elif '万' in value:
+                                amount = float(value.replace('万', '')) * 10000
+                            else:
+                                try:
+                                    amount = float(value.replace(',', ''))
+                                except ValueError:
+                                    continue
                         else:
                             try:
-                                amount = float(amount.replace(',', ''))
-                            except ValueError:
+                                amount = float(value)
+                            except (ValueError, TypeError):
                                 continue
+                        
+                        if amount > 0:
+                            volumes.append(VolumeData(
+                                date=formatted_date,
+                                volume=amount
+                            ))
+                            logger.info(f"提取到 {formatted_date}: {amount:,.0f}元")
+                
+                # 如果没有找到日期在字段名中的格式，尝试旧格式（单条记录包含单个日期）
+                if not has_date_in_fields:
+                    date_str = item.get('时间区间', item.get('date', ''))
+                    amount = item.get('成交额', item.get('同花顺全A成交金额', item.get('amount', 0)))
                     
-                    volumes.append(VolumeData(
-                        date=str(date_str),
-                        volume=float(amount)
-                    ))
-                    logger.info(f"提取到 {date_str}: {float(amount):,.0f}元")
+                    if date_str and amount:
+                        date_str = str(date_str)
+                        if len(date_str) == 8:
+                            date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                        
+                        if isinstance(amount, str):
+                            if '万亿' in amount:
+                                amount = float(amount.replace('万亿', '')) * 1000000000000
+                            elif '亿' in amount:
+                                amount = float(amount.replace('亿', '')) * 100000000
+                            elif '万' in amount:
+                                amount = float(amount.replace('万', '')) * 10000
+                            else:
+                                try:
+                                    amount = float(amount.replace(',', ''))
+                                except ValueError:
+                                    continue
+                        
+                        volumes.append(VolumeData(
+                            date=str(date_str),
+                            volume=float(amount)
+                        ))
+                        logger.info(f"提取到 {date_str}: {float(amount):,.0f}元")
+            
+            # 按日期排序（降序，最新的在前）
+            volumes.sort(key=lambda x: x.date, reverse=True)
+            
+            # 只返回指定天数的数据
+            volumes = volumes[:days]
             
             logger.info(f"获取到 {len(volumes)} 日成交额数据")
         except Exception as e:
             logger.error(f"成交额历史查询失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         
         return volumes
     
