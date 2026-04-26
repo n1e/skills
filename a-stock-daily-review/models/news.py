@@ -20,6 +20,7 @@ class NewsItem:
     extra: Optional[str] = None
     hover: Optional[str] = None
     icon: Optional[str] = None
+    rank: int = 0
 
 
 @dataclass
