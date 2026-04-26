@@ -11,7 +11,12 @@
   "news_rank": {
     "enabled": true,
     "top": 30,
-    "sources": ["weibo", "zhihu", "bilibili", "baidu", "wallstreetcn"]
+    "sources": [
+      "weibo", "zhihu", "bilibili", "bilibili_video", "baidu",
+      "douyin", "ithome", "juejin", "hupu", "tieba",
+      "douban", "sspai", "nowcoder", "wallstreetcn", "ifeng",
+      "thepaper", "36kr", "solidot"
+    ]
   },
   "surge": {
     "min_change_pct": 9.5,
