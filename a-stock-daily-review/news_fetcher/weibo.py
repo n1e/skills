@@ -37,24 +37,32 @@ class WeiboCollector(BaseNewsCollector):
 
     def _parse(self, html: str) -> List[NewsItem]:
         items = []
-        
+
         soup = BeautifulSoup(html, "lxml")
-        
+
         table = soup.select_one("#pl_top_realtimehot table")
         if not table:
             return items
-            
+
         for tr in table.select("tbody tr"):
+            rank_td = tr.select_one("td.td-01")
+            if rank_td:
+                rank_text = rank_td.get_text(strip=True)
+                if not rank_text.isdigit():
+                    continue
+                if int(rank_text) <= 0:
+                    continue
+
             link = tr.select_one("td.td-02 a")
             if not link:
                 continue
-            
+
             href = link.get("href", "")
             title = link.get_text(strip=True)
-            
+
             if not title or not href or "javascript" in href:
                 continue
-            
+
             items.append(NewsItem(
                 id=title,
                 title=title,
@@ -62,5 +70,5 @@ class WeiboCollector(BaseNewsCollector):
                 pub_date=datetime.now(),
                 source=self.name,
             ))
-        
+
         return items

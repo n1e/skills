@@ -262,8 +262,9 @@ def collect_news_data(top: int = 30):
                     break
                 if items and source_name:
                     source_news[source_name] = items
-                    for item in items:
+                    for idx, item in enumerate(items):
                         item.source = source_name
+                        item.rank = idx + 1
                         all_news.append(item)
             except Exception:
                 pass
