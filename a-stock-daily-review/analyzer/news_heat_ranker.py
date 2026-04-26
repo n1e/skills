@@ -3,8 +3,14 @@
 核心思想：
 1. 不使用各站点各自的热度值（跨站点无参考性）
 2. 直接使用资讯在所在站点的排名作为计算基础
-3. 使用对数衰减函数将排名转换为可比较的分数
+3. 使用幂次衰减函数将排名转换为可比较的分数（衰减更平缓）
 4. 跨平台出现的新闻给予额外乘数奖励
+
+站点权重配置：
+- 微博、抖音：1.0（最高权重）
+- 技术网站（IT之家、掘金、少数派、牛客、Solidot）：0.6
+- 豆瓣（小众平台）：0.5
+- 其他站点默认：0.75
 """
 import jieba
 import logging
@@ -22,23 +28,27 @@ from logger import logger
 
 SOURCE_WEIGHTS = {
     "微博": 1.0,
-    "知乎": 0.9,
-    "哔哩哔哩": 0.8,
-    "百度热搜": 1.0,
-    "华尔街见闻": 0.85,
+    "抖音": 1.0,
+    "百度热搜": 0.75,
+    "知乎": 0.75,
+    "哔哩哔哩": 0.75,
+    "华尔街见闻": 0.75,
     "36氪": 0.75,
-    "虎扑": 0.7,
-    "豆瓣": 0.65,
-    "贴吧": 0.65,
-    "抖音": 0.8,
+    "虎扑": 0.75,
+    "贴吧": 0.75,
+    "凤凰网": 0.75,
+    "澎湃新闻": 0.75,
     "IT之家": 0.6,
-    "掘金": 0.55,
-    "少数派": 0.55,
-    "牛客": 0.5,
-    "凤凰网": 0.6,
-    "澎湃新闻": 0.65,
-    "Solidot": 0.5,
+    "掘金": 0.6,
+    "少数派": 0.6,
+    "牛客": 0.6,
+    "Solidot": 0.6,
+    "豆瓣": 0.5,
 }
+
+
+def get_default_source_weight() -> float:
+    return 0.75
 
 STOPWORDS = {
     "的", "了", "是", "在", "和", "与", "或", "等", "被", "把", "将",
@@ -62,7 +72,7 @@ CROSS_PLATFORM_MULTIPLIER = {
 
 
 def get_source_weight(source: str) -> float:
-    return SOURCE_WEIGHTS.get(source, 0.6)
+    return SOURCE_WEIGHTS.get(source, get_default_source_weight())
 
 
 def get_cross_platform_multiplier(platform_count: int) -> float:
@@ -71,17 +81,23 @@ def get_cross_platform_multiplier(platform_count: int) -> float:
     return CROSS_PLATFORM_MULTIPLIER.get(platform_count, 1.0)
 
 
+RANK_DECAY_ALPHA = 0.35
+
+
 def rank_to_score(rank: int, source_weight: float = 1.0, max_rank: int = 50) -> float:
     """
-    将排名转换为热度分数（使用对数衰减）
+    将排名转换为热度分数（使用幂次衰减，比对数衰减更平缓）
     
     数学原理：
-    - 排名越靠前，分数越高，符合Zipf分布
+    - 公式：基础分 = 站点权重 × (100 / rank^0.35)
+    - 衰减更平缓，避免第一名与第二名差距过大
     - 第1名 = 100 × 权重
-    - 第2名 ≈ 63 × 权重
-    - 第3名 = 50 × 权重
-    - 第10名 ≈ 30 × 权重
-    - 第30名 ≈ 20 × 权重
+    - 第2名 ≈ 78 × 权重
+    - 第3名 ≈ 68 × 权重
+    - 第5名 ≈ 56 × 权重
+    - 第10名 ≈ 45 × 权重
+    - 第20名 ≈ 35 × 权重
+    - 第30名 ≈ 30 × 权重
     
     Args:
         rank: 排名（从1开始）
@@ -94,7 +110,7 @@ def rank_to_score(rank: int, source_weight: float = 1.0, max_rank: int = 50) -> 
     if rank <= 0 or rank > max_rank:
         return 0.0
     
-    score = 100.0 / math.log2(rank + 1)
+    score = 100.0 / (rank ** RANK_DECAY_ALPHA)
     
     return score * source_weight
 
