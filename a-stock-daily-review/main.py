@@ -29,6 +29,8 @@ from fetcher.legu import LeguFetcher
 from fetcher.funddb import FunddbFetcher
 from analyzer.reason_analyzer import ReasonAnalyzer
 from analyzer.heat_ranker import HeatRanker
+from analyzer.news_heat_ranker import NewsHeatRanker
+from news_fetcher import get_all_collectors
 from reporter.generators import MarkdownGenerator, JsonGenerator, PDFGenerator, HTMLGenerator
 
 
@@ -218,6 +220,66 @@ def collect_heat_ranks(wencai_fetcher: WencaiFetcher, top: int = 50):
     return wencai_ranks, xueqiu_ranks, eastmoney_ranks
 
 
+def collect_news_data(top: int = 30):
+    """
+    收集新闻资讯并计算复合热度排名
+
+    Args:
+        top: 返回前N名
+
+    Returns:
+        复合资讯热度排名列表
+    """
+    logger.info(f"开始收集新闻资讯（复合热度排名TOP{top}）")
+
+    collectors = get_all_collectors()
+    all_news = []
+    source_news = {}
+
+    def collect_one(source_id, collector_class):
+        try:
+            logger.info(f"[{source_id}] 开始采集...")
+            collector = collector_class()
+            items = collector.collect()
+            if items:
+                logger.info(f"[{collector.name}] 采集成功, {len(items)}条")
+            else:
+                logger.warning(f"[{source_id}] 无数据")
+            return collector.name, items
+        except Exception as e:
+            logger.error(f"[{source_id}] 采集失败: {e}")
+            return None, []
+
+    import time
+    start_time = time.time()
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(collect_one, sid, cls): sid for sid, cls in collectors.items()}
+        for future in as_completed(futures):
+            try:
+                source_name, items = future.result(timeout=15)
+                if time.time() - start_time > 60:
+                    break
+                if items and source_name:
+                    source_news[source_name] = items
+                    for item in items:
+                        item.source = source_name
+                        all_news.append(item)
+            except Exception:
+                pass
+
+    logger.info(f"新闻采集完成: 共{len(all_news)}条, 来源{len(source_news)}个站点")
+
+    if not all_news:
+        logger.warning("没有采集到任何新闻数据")
+        return []
+
+    news_ranks = NewsHeatRanker.calculate_composite_news_heat(all_news, top=top)
+    logger.info(f"复合资讯热度排名计算完成: 共{len(news_ranks)}条")
+
+    return news_ranks
+
+
 def build_review_data(date: str) -> DailyReview:
     """
     构建完整的复盘数据（支持部分缓存，已成功的步骤不会重新获取）
@@ -240,26 +302,28 @@ def build_review_data(date: str) -> DailyReview:
     min_change = config.get('surge.min_change_pct', 9.5)
     max_stocks = config.get('surge.max_stocks', 200)
     top_rank = config.get('heat_rank.top', 50)
+    news_top = config.get('news_rank.top', 30)
+    news_enabled = config.get('news_rank.enabled', True)
 
     # 1. 收集大盘数据
-    logger.info("\n[1/4] 收集大盘数据")
+    logger.info("\n[1/5] 收集大盘数据")
     wencai_fetcher = WencaiFetcher()
     legu_fetcher = LeguFetcher()
     review.market = collect_market_data(legu_fetcher)
 
     # 2. 收集成交量历史
-    logger.info("\n[2/4] 收集成交量历史")
+    logger.info("\n[2/5] 收集成交量历史")
     review.volume_history = collect_volume_history(wencai_fetcher, days=30)
 
     # 3. 收集涨停股票
-    logger.info("\n[3/4] 收集涨停股票")
+    logger.info("\n[3/5] 收集涨停股票")
     review.surge_stocks = collect_surge_stocks(wencai_fetcher, min_change, max_stocks)
     for stock in review.surge_stocks:
         if not stock.reason_category:
             stock.reason_category = ReasonAnalyzer.analyze(stock.reason)
 
     # 4. 收集人气排名（整合雪球、东财、问财三大平台的综合排名TOP50）
-    logger.info("\n[4/4] 收集人气排名（整合雪球、东财、问财三大平台）")
+    logger.info("\n[4/5] 收集人气排名（整合雪球、东财、问财三大平台）")
     wencai_ranks, xueqiu_ranks, eastmoney_ranks = collect_heat_ranks(wencai_fetcher, top_rank)
     review.heat_ranks = HeatRanker.calculate_composite_heat(
         wencai_ranks=wencai_ranks,
@@ -268,12 +332,21 @@ def build_review_data(date: str) -> DailyReview:
         top=top_rank,
     )
 
+    # 5. 收集新闻资讯热度排名（复合资讯热度TOP30）
+    if news_enabled:
+        logger.info(f"\n[5/5] 收集新闻资讯热度排名（复合热度TOP{news_top}）")
+        review.news_ranks = collect_news_data(top=news_top)
+    else:
+        logger.info("\n[5/5] 新闻资讯排名已禁用，跳过")
+        review.news_ranks = []
+
     # 缓存成功获取的数据
     try:
         cache['market'] = {k: v for k, v in review.market.__dict__.items() if not k.startswith('_')}
         cache['volume_count'] = len(review.volume_history)
         cache['surge_count'] = len(review.surge_stocks)
         cache['heat_count'] = len(review.heat_ranks)
+        cache['news_count'] = len(review.news_ranks)
         _save_cache(date, cache)
     except Exception:
         pass
@@ -283,6 +356,7 @@ def build_review_data(date: str) -> DailyReview:
     logger.info(f"大盘: 涨跌比={review.market.rise_fall_ratio:.2f}, 涨停{review.market.limit_up_count}只")
     logger.info(f"涨停股票: {len(review.surge_stocks)}只")
     logger.info(f"人气排名TOP50: 已计算")
+    logger.info(f"资讯热度TOP{news_top}: 已计算 ({len(review.news_ranks)}条)")
     logger.info("=" * 60)
 
     return review

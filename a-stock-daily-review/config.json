@@ -8,6 +8,11 @@
     "top": 50,
     "sources": ["wencai", "xueqiu", "eastmoney", "thsi"]
   },
+  "news_rank": {
+    "enabled": true,
+    "top": 30,
+    "sources": ["weibo", "zhihu", "bilibili", "baidu", "wallstreetcn"]
+  },
   "surge": {
     "min_change_pct": 9.5,
     "max_stocks": 200

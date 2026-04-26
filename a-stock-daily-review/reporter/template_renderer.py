@@ -148,6 +148,24 @@ class TemplateRenderer:
         return "\n".join(lines)
     
     @staticmethod
+    def render_news_ranks(news_ranks) -> str:
+        """渲染新闻资讯热度排名表格"""
+        if not news_ranks:
+            return ""
+        
+        lines = []
+        lines.append("| 排名 | 资讯标题 | 来源数 | 来源平台 | 热度分 |")
+        lines.append("|------|---------|--------|---------|--------|")
+        
+        for i, r in enumerate(news_ranks[:30]):
+            title = r.title[:40] + "..." if len(r.title) > 40 else r.title
+            sources = ', '.join(r.sources) if r.sources else ''
+            sources = sources[:20] + "..." if len(sources) > 20 else sources
+            lines.append(f"| {i+1} | {title} | {r.source_count} | {sources} | {r.composite_score:8.1f} |")
+        
+        return "\n".join(lines)
+    
+    @staticmethod
     def render_surge_analysis(surge_stocks) -> str:
         """渲染涨停分析"""
         if not surge_stocks:

@@ -74,6 +74,12 @@ class MarkdownGenerator:
             lines.append(self.renderer.render_heat_ranks(self.review.heat_ranks))
             lines.append("")
         
+        # 新闻资讯热度排名
+        if self.review.news_ranks:
+            lines.append(f"## 📰 复合资讯热度TOP30（综合排名）\n")
+            lines.append(self.renderer.render_news_ranks(self.review.news_ranks))
+            lines.append("")
+        
         # 页脚
         lines.append("---\n")
         lines.append(f"*报告生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")

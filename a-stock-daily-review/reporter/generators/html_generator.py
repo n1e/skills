@@ -26,6 +26,7 @@ class HTMLGenerator:
         self.volume_history = review.volume_history
         self.surge_stocks = review.surge_stocks
         self.heat_ranks = review.heat_ranks
+        self.news_ranks = review.news_ranks
     
     def generate(self) -> str:
         """生成完整的HTML报告"""
@@ -96,6 +97,18 @@ class HTMLGenerator:
                 'wencai': r.wencai_rank if r.wencai_rank > 0 else '-',
                 'xueqiu': r.xueqiu_rank if r.xueqiu_rank > 0 else '-',
                 'dongcai': r.eastmoney_rank if r.eastmoney_rank > 0 else '-',
+                'score': round(r.composite_score, 1)
+            })
+        
+        # 新闻资讯热度排名数据
+        news_rank_data = []
+        for i, r in enumerate(self.news_ranks[:30]):
+            news_rank_data.append({
+                'rank': i + 1,
+                'title': r.title,
+                'url': r.representative_url,
+                'source_count': r.source_count,
+                'sources': ', '.join(r.sources) if r.sources else '',
                 'score': round(r.composite_score, 1)
             })
         
@@ -1066,6 +1079,30 @@ class HTMLGenerator:
             </div>
         </div>
         
+        <!-- 复合资讯热度TOP30 -->
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">📰</span>
+                复合资讯热度 TOP30
+            </div>
+            <div class="table-wrapper">
+                <table id="newsRankTable">
+                    <thead>
+                        <tr>
+                            <th>排名</th>
+                            <th>资讯标题</th>
+                            <th>来源数</th>
+                            <th>来源平台</th>
+                            <th>热度分</th>
+                        </tr>
+                    </thead>
+                    <tbody id="newsRankTableBody">
+                        <!-- 动态生成 -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
         <!-- 页脚 -->
         <div class="footer">
             <p>报告生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
@@ -1207,6 +1244,27 @@ class HTMLGenerator:
                 <td><strong>${{item.score}}</strong></td>
             `;
             rankTableBody.appendChild(row);
+        }});
+        
+        // 新闻资讯热度排名数据
+        const newsRankData = {json.dumps(news_rank_data, ensure_ascii=False)};
+        
+        // 生成新闻排名表格
+        const newsRankTableBody = document.getElementById('newsRankTableBody');
+        newsRankData.forEach(item => {{
+            const row = document.createElement('tr');
+            if (item.rank <= 3) {{
+                row.className = `rank-${{item.rank}}`;
+            }}
+            const titleLink = item.url ? `<a href="${{item.url}}" target="_blank" style="color: #1a73e8; text-decoration: none;">${{item.title}}</a>` : item.title;
+            row.innerHTML = `
+                <td>${{item.rank}}</td>
+                <td style="text-align: left; padding-left: 16px;">${{titleLink}}</td>
+                <td>${{item.source_count}}</td>
+                <td>${{item.sources}}</td>
+                <td><strong>${{item.score}}</strong></td>
+            `;
+            newsRankTableBody.appendChild(row);
         }});
         
         // 仪表盘动画

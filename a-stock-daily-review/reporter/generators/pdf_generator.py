@@ -648,6 +648,55 @@ class PDFGenerator:
         
         return elements
     
+    def _create_news_rank_section(self, news_ranks) -> list:
+        """创建新闻资讯热度排名部分"""
+        elements = []
+        if not news_ranks:
+            return elements
+        
+        elements.append(Paragraph("复合资讯热度TOP30", self._styles['h1']))
+        elements.append(Spacer(1, 8))
+        
+        news_data = [[
+            Paragraph("排名", self._styles['table_header']),
+            Paragraph("资讯标题", self._styles['table_header']),
+            Paragraph("来源数", self._styles['table_header']),
+            Paragraph("来源平台", self._styles['table_header']),
+            Paragraph("热度分", self._styles['table_header'])
+        ]]
+        for i, r in enumerate(news_ranks[:30]):
+            title = r.title[:35] + "..." if len(r.title) > 35 else r.title
+            sources = ', '.join(r.sources) if r.sources else ''
+            sources = sources[:15] + "..." if len(sources) > 15 else sources
+            news_data.append([
+                Paragraph(str(i+1), self._styles['table_cell']),
+                Paragraph(title, self._styles['table_cell_left']),
+                Paragraph(str(r.source_count), self._styles['table_cell']),
+                Paragraph(sources, self._styles['table_cell_left']),
+                Paragraph(f"{r.composite_score:.1f}", self._styles['table_cell'])
+            ])
+        
+        news_table = Table(news_data, colWidths=[40, 180, 50, 120, 60])
+        news_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), PRIMARY_COLOR),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), self._font_name),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('GRID', (0, 0), (-1, -1), 1, LIGHT_GRAY),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('ALIGN', (1, 1), (1, -1), 'LEFT'),
+            ('ALIGN', (3, 1), (3, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, BG_COLOR]),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ]))
+        elements.append(news_table)
+        elements.append(Spacer(1, 8))
+        
+        return elements
+    
     def _analyze_surge_reasons(self, surge_stocks: List[SurgeStock]) -> List[tuple]:
         """分析涨停原因，统计概念标签频次"""
         tag_counter = Counter()
@@ -750,6 +799,7 @@ class PDFGenerator:
         elements.extend(self._create_volume_section(review.volume_history))
         elements.extend(self._create_distribution_section(review.market))
         elements.extend(self._create_heat_rank_section(review.heat_ranks))
+        elements.extend(self._create_news_rank_section(review.news_ranks))
         elements.extend(self._create_surge_section(review.surge_stocks))
         
         elements.append(Spacer(1, 12))

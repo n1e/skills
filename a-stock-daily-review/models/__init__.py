@@ -7,6 +7,7 @@
 from .market import MarketData, VolumeData
 from .stock import SurgeStock, HeatRank, CompositeHeatRank
 from .review import DailyReview
+from .news import NewsItem, CompositeNewsRank
 
 __all__ = [
     'MarketData',
@@ -14,5 +15,7 @@ __all__ = [
     'SurgeStock',
     'HeatRank',
     'CompositeHeatRank',
-    'DailyReview'
+    'DailyReview',
+    'NewsItem',
+    'CompositeNewsRank'
 ]
