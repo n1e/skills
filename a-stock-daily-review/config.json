@@ -8,6 +8,16 @@
     "top": 50,
     "sources": ["wencai", "xueqiu", "eastmoney", "thsi"]
   },
+  "news_rank": {
+    "enabled": true,
+    "top": 30,
+    "sources": [
+      "weibo", "zhihu", "bilibili", "bilibili_video", "baidu",
+      "douyin", "ithome", "juejin", "hupu", "tieba",
+      "douban", "sspai", "nowcoder", "wallstreetcn", "ifeng",
+      "thepaper", "36kr", "solidot"
+    ]
+  },
   "surge": {
     "min_change_pct": 9.5,
     "max_stocks": 200

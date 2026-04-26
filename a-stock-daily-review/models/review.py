@@ -10,6 +10,7 @@ from typing import List, TYPE_CHECKING
 if TYPE_CHECKING:
     from .market import MarketData, VolumeData
     from .stock import SurgeStock, CompositeHeatRank
+    from .news import CompositeNewsRank
 
 
 def _market_factory():
@@ -25,3 +26,4 @@ class DailyReview:
     volume_history: List['VolumeData'] = field(default_factory=list)
     surge_stocks: List['SurgeStock'] = field(default_factory=list)
     heat_ranks: List['CompositeHeatRank'] = field(default_factory=list)
+    news_ranks: List['CompositeNewsRank'] = field(default_factory=list)

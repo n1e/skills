@@ -1,6 +1,9 @@
 requests>=2.28.0
 colorlog>=6.0.0
 reportlab>=4.0.0
+jieba>=0.42.1
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
 
 # 可选依赖（增强功能）
 # tenacity>=8.0.0  # 更强大的重试机制（如需要可使用）

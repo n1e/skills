@@ -77,6 +77,19 @@ class JsonGenerator:
                     "appear_count": r.appear_count
                 }
                 for i, r in enumerate(self.review.heat_ranks)
+            ],
+            "news_ranks": [
+                {
+                    "rank": r.rank,
+                    "title": r.title,
+                    "url": r.representative_url,
+                    "source_count": r.source_count,
+                    "sources": r.sources,
+                    "composite_score": round(r.composite_score, 1),
+                    "avg_hot_score": round(r.avg_hot_score, 2),
+                    "related_news_count": len(r.related_news) if r.related_news else 0
+                }
+                for r in self.review.news_ranks
             ]
         }
         
