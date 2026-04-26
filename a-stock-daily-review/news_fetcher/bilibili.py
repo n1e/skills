@@ -1,66 +1,53 @@
-"""微博热榜采集器"""
+"""哔哩哔哩热搜采集器"""
 import requests
-from bs4 import BeautifulSoup
+from urllib.parse import quote
 from datetime import datetime
 from typing import List
-from .base import BaseNewsCollector, NewsItem
+from .base import BaseNewsCollector
+from models.news import NewsItem
 
 
-class WeiboCollector(BaseNewsCollector):
-    """微博热榜"""
+class BilibiliCollector(BaseNewsCollector):
+    """哔哩哔哩热搜采集器"""
 
     @property
     def id(self):
-        return "weibo"
+        return "bilibili"
 
     @property
     def name(self):
-        return "微博"
+        return "哔哩哔哩"
 
     def collect(self) -> List[NewsItem]:
-        baseURL = "https://s.weibo.com"
-        url = baseURL + "/top/summary?cate=realtimehot"
-        
+        url = "https://s.search.bilibili.com/main/hotword?limit=30"
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-            "Cookie": "SUB=_2AkMWIuNSf8NxqwJRmP8dy2rhaoV2ygrEieKgfhKJJRMxHRl-yT9jqk86tRB6PaLNvQZR6zYUcYVT1zSjoSreQHidcUq7",
-            "Referer": url,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.bilibili.com/",
         }
-        
         try:
-            resp = requests.get(url, headers=headers, timeout=30)
-            return self._parse(resp.text)
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            return self._parse(data)
         except Exception as e:
             from logger import logger
-            logger.warning(f"微博采集失败: {e}")
+            logger.warning(f"B站采集失败: {e}")
             return []
 
-    def _parse(self, html: str) -> List[NewsItem]:
+    def _parse(self, data: dict) -> List[NewsItem]:
         items = []
-        
-        soup = BeautifulSoup(html, "lxml")
-        
-        table = soup.select_one("#pl_top_realtimehot table")
-        if not table:
-            return items
-            
-        for tr in table.select("tbody tr"):
-            link = tr.select_one("td.td-02 a")
-            if not link:
+        for item in data.get("list", []):
+            keyword = item.get("keyword", "")
+            show_name = item.get("show_name", "") or keyword
+            if not show_name:
                 continue
-            
-            href = link.get("href", "")
-            title = link.get_text(strip=True)
-            
-            if not title or not href or "javascript" in href:
-                continue
-            
+
             items.append(NewsItem(
-                id=title,
-                title=title,
-                url=f"https://s.weibo.com{href}",
+                id=keyword,
+                title=show_name,
+                url=f"https://search.bilibili.com/all?keyword={quote(keyword)}",
                 pub_date=datetime.now(),
                 source=self.name,
+                icon=item.get("icon", ""),
             ))
-        
         return items

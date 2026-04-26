@@ -1,66 +1,63 @@
-"""微博热榜采集器"""
+"""百度热搜采集器"""
 import requests
-from bs4 import BeautifulSoup
+import re
+import json
 from datetime import datetime
 from typing import List
-from .base import BaseNewsCollector, NewsItem
+from .base import BaseNewsCollector
+from models.news import NewsItem
 
 
-class WeiboCollector(BaseNewsCollector):
-    """微博热榜"""
+class BaiduCollector(BaseNewsCollector):
+    """百度热搜采集器"""
 
     @property
     def id(self):
-        return "weibo"
+        return "baidu"
 
     @property
     def name(self):
-        return "微博"
+        return "百度热搜"
 
     def collect(self) -> List[NewsItem]:
-        baseURL = "https://s.weibo.com"
-        url = baseURL + "/top/summary?cate=realtimehot"
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-            "Cookie": "SUB=_2AkMWIuNSf8NxqwJRmP8dy2rhaoV2ygrEieKgfhKJJRMxHRl-yT9jqk86tRB6PaLNvQZR6zYUcYVT1zSjoSreQHidcUq7",
-            "Referer": url,
-        }
-        
+        url = "https://top.baidu.com/board?tab=realtime"
+        headers = {"User-Agent": "Mozilla/5.0"}
         try:
-            resp = requests.get(url, headers=headers, timeout=30)
+            resp = requests.get(url, headers=headers, timeout=10)
             return self._parse(resp.text)
         except Exception as e:
             from logger import logger
-            logger.warning(f"微博采集失败: {e}")
+            logger.warning(f"百度采集失败: {e}")
             return []
 
     def _parse(self, html: str) -> List[NewsItem]:
         items = []
         
-        soup = BeautifulSoup(html, "lxml")
-        
-        table = soup.select_one("#pl_top_realtimehot table")
-        if not table:
+        match = re.search(r'<!--s-data:([\s\S]*?)-->', html)
+        if not match:
             return items
-            
-        for tr in table.select("tbody tr"):
-            link = tr.select_one("td.td-02 a")
-            if not link:
-                continue
-            
-            href = link.get("href", "")
-            title = link.get_text(strip=True)
-            
-            if not title or not href or "javascript" in href:
-                continue
-            
-            items.append(NewsItem(
-                id=title,
-                title=title,
-                url=f"https://s.weibo.com{href}",
-                pub_date=datetime.now(),
-                source=self.name,
-            ))
+        
+        try:
+            data = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return items
+        
+        cards = data.get("data", {}).get("cards", [])
+        for card in cards:
+            for content in card.get("content", []):
+                if content.get("isTop"):
+                    continue
+                word = content.get("word", "")
+                if not word:
+                    continue
+                raw_url = content.get("rawUrl", "")
+                items.append(NewsItem(
+                    id=raw_url if raw_url else word,
+                    title=word,
+                    url=raw_url if raw_url.startswith("http") else f"https://top.baidu.com{raw_url}",
+                    pub_date=datetime.now(),
+                    source=self.name,
+                    hover=content.get("desc", ""),
+                ))
         
         return items

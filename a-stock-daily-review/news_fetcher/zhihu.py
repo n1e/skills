@@ -1,66 +1,63 @@
-"""微博热榜采集器"""
+"""知乎热榜采集器"""
 import requests
-from bs4 import BeautifulSoup
+import re
 from datetime import datetime
 from typing import List
-from .base import BaseNewsCollector, NewsItem
+from .base import BaseNewsCollector
+from models.news import NewsItem
 
 
-class WeiboCollector(BaseNewsCollector):
-    """微博热榜"""
+class ZhihuCollector(BaseNewsCollector):
+    """知乎热榜采集器"""
 
     @property
     def id(self):
-        return "weibo"
+        return "zhihu"
 
     @property
     def name(self):
-        return "微博"
+        return "知乎"
 
     def collect(self) -> List[NewsItem]:
-        baseURL = "https://s.weibo.com"
-        url = baseURL + "/top/summary?cate=realtimehot"
-        
+        url = "https://www.zhihu.com/api/v3/feed/topstory/hot-list-web?limit=20&desktop=true"
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-            "Cookie": "SUB=_2AkMWIuNSf8NxqwJRmP8dy2rhaoV2ygrEieKgfhKJJRMxHRl-yT9jqk86tRB6PaLNvQZR6zYUcYVT1zSjoSreQHidcUq7",
-            "Referer": url,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.zhihu.com/",
         }
-        
         try:
-            resp = requests.get(url, headers=headers, timeout=30)
-            return self._parse(resp.text)
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            return self._parse(data)
         except Exception as e:
             from logger import logger
-            logger.warning(f"微博采集失败: {e}")
+            logger.warning(f"知乎采集失败: {e}")
             return []
 
-    def _parse(self, html: str) -> List[NewsItem]:
+    def _parse(self, data: dict) -> List[NewsItem]:
         items = []
-        
-        soup = BeautifulSoup(html, "lxml")
-        
-        table = soup.select_one("#pl_top_realtimehot table")
-        if not table:
-            return items
-            
-        for tr in table.select("tbody tr"):
-            link = tr.select_one("td.td-02 a")
-            if not link:
+        re_id = re.compile(r"(\d+)$")
+        for item in data.get("data", []):
+            target = item.get("target", {})
+            link = target.get("link", {})
+            url = link.get("url", "")
+            match = re_id.search(url)
+            news_id = match.group(1) if match else url
+
+            title = target.get("title_area", {}).get("text", "")
+            excerpt = target.get("excerpt_area", {}).get("text", "")
+            metrics = target.get("metrics_area", {}).get("text", "")
+
+            if not title:
                 continue
-            
-            href = link.get("href", "")
-            title = link.get_text(strip=True)
-            
-            if not title or not href or "javascript" in href:
-                continue
-            
+
             items.append(NewsItem(
-                id=title,
+                id=news_id,
                 title=title,
-                url=f"https://s.weibo.com{href}",
+                url=url,
                 pub_date=datetime.now(),
                 source=self.name,
+                extra=metrics,
+                hover=excerpt,
             ))
-        
         return items
