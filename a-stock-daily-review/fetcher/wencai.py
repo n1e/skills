@@ -66,7 +66,7 @@ def get_wencai_config() -> Dict[str, Any]:
             config_dict['api_key'] = json_api_key
         
         skill_name = global_config.get('wencai.skill_name', '')
-        if skill_name:
+        if skill_name and skill_name.isascii():
             config_dict['skill_name'] = skill_name
     
     return config_dict

@@ -378,6 +378,7 @@ class XueqiuFetcher:
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         }
         resp = self.session.get('https://xueqiu.com/hot/stock', headers=headers, timeout=15)
+        resp.raise_for_status()
         return resp.text
 
     def _parse_html(self, html: str) -> List[StockRank]:
@@ -393,9 +394,17 @@ class XueqiuFetcher:
                 continue
             seen.add(full_code)
 
+            try:
+                decoded_name = name.encode('latin-1').decode('utf-8')
+            except:
+                try:
+                    decoded_name = name.encode('utf-8').decode('unicode_escape')
+                except:
+                    decoded_name = name
+
             ranks.append(StockRank(
                 code=code,
-                name=name,
+                name=decoded_name,
                 rank=len(ranks) + 1,
                 heat_score=100 - len(ranks),
                 source='xueqiu'
