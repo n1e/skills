@@ -181,6 +181,12 @@ class WencaiOpenAPI:
                 timeout=30
             )
             
+            logger.info(f"API 响应状态码: {resp.status_code}")
+            logger.info(f"API 响应头: {dict(resp.headers)}")
+            
+            raw_text = resp.text
+            logger.info(f"API 原始响应内容 (前500字符): {raw_text[:500] if len(raw_text) > 500 else raw_text}")
+            
             result = resp.json()
             
             if isinstance(result, dict):
@@ -204,6 +210,10 @@ class WencaiOpenAPI:
             return None
         except json.JSONDecodeError as e:
             logger.warning(f"OpenAPI 响应解析失败: {e}")
+            try:
+                logger.warning(f"无法解析的响应内容: {resp.text[:1000] if 'resp' in dir() else '无法获取响应'}")
+            except Exception:
+                pass
             return None
         except Exception as e:
             logger.warning(f"OpenAPI 查询异常: {e}")

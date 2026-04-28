@@ -10,7 +10,6 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -117,11 +116,19 @@ func (api *WencaiOpenAPI) Query(query string, limit int) (map[string]interface{}
 	}
 	defer resp.Body.Close()
 
+	fmt.Printf("  API 响应状态码: %d\n", resp.StatusCode)
+	fmt.Printf("  API 响应头: %v\n", resp.Header)
+
 	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+	if len(bodyStr) > 500 {
+		bodyStr = bodyStr[:500]
+	}
+	fmt.Printf("  API 原始响应内容 (前500字符): %s\n", bodyStr)
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %v", err)
+		return nil, fmt.Errorf("解析响应失败: %v, 原始响应: %s", err, string(body))
 	}
 
 	statusCode, ok := result["status_code"].(float64)
