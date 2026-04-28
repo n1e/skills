@@ -374,11 +374,27 @@ class XueqiuFetcher:
         """获取页面HTML"""
         headers = {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
             'Accept-Language': 'zh-CN,zh;q=0.9',
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         }
         resp = self.session.get('https://xueqiu.com/hot/stock', headers=headers, timeout=15)
-        return resp.text
+        
+        content = resp.content
+        
+        if resp.headers.get('Content-Encoding') == 'gzip':
+            try:
+                content = gzip.decompress(content)
+            except Exception:
+                pass
+        
+        try:
+            return content.decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                return content.decode('gbk')
+            except UnicodeDecodeError:
+                return content.decode('utf-8', errors='replace')
 
     def _parse_html(self, html: str) -> List[StockRank]:
         """解析HTML获取股票数据"""
@@ -393,9 +409,17 @@ class XueqiuFetcher:
                 continue
             seen.add(full_code)
 
+            try:
+                decoded_name = name.encode('latin-1').decode('utf-8')
+            except:
+                try:
+                    decoded_name = name.encode('utf-8').decode('unicode_escape')
+                except:
+                    decoded_name = name
+
             ranks.append(StockRank(
                 code=code,
-                name=name,
+                name=decoded_name,
                 rank=len(ranks) + 1,
                 heat_score=100 - len(ranks),
                 source='xueqiu'
