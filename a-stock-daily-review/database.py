@@ -84,9 +84,9 @@ class DatabaseManager:
             """)
             
             # 4. 涨停股票明细表（便于多日分析）
+            # 使用复合主键 (date, code)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS surge_stocks_daily (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     date VARCHAR,
                     code VARCHAR,
                     name VARCHAR,
@@ -94,14 +94,14 @@ class DatabaseManager:
                     change_pct FLOAT,
                     reason VARCHAR,
                     reason_category VARCHAR,
-                    UNIQUE(date, code)
+                    PRIMARY KEY (date, code)
                 )
             """)
             
             # 5. 人气排名明细表（便于多日分析）
+            # 使用复合主键 (date, code)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS heat_ranks_daily (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     date VARCHAR,
                     code VARCHAR,
                     name VARCHAR,
@@ -111,7 +111,7 @@ class DatabaseManager:
                     xueqiu_rank INTEGER,
                     eastmoney_rank INTEGER,
                     thsi_rank INTEGER,
-                    UNIQUE(date, code)
+                    PRIMARY KEY (date, code)
                 )
             """)
             
