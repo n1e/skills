@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -32,6 +33,16 @@ from analyzer.heat_ranker import HeatRanker
 from analyzer.news_heat_ranker import NewsHeatRanker
 from news_fetcher import get_all_collectors
 from reporter.generators import MarkdownGenerator, JsonGenerator, PDFGenerator, HTMLGenerator
+
+# 服务模式相关模块（可选导入）
+try:
+    from database import get_database
+    from scheduler import get_scheduler
+    from webapp import create_app
+    _service_modules_available = True
+except ImportError as e:
+    logger.warning(f"服务模式模块导入失败: {e}")
+    _service_modules_available = False
 
 
 def _cache_path(date: str) -> str:
@@ -418,26 +429,59 @@ def generate_report(review: DailyReview, output_format: str = 'md', output_path:
     return content
 
 
-def main():
-    """主函数"""
-    parser = argparse.ArgumentParser(description='A股每日复盘报告生成器')
-    parser.add_argument('--format', choices=['md', 'json', 'pdf', 'html'], default='md',
-                       help='输出格式 (默认: md)')
-    parser.add_argument('--output', type=str, default='',
-                       help='输出文件路径 (默认: output/review_YYYY-MM-DD.md)')
-    parser.add_argument('--date', type=str, default='',
-                       help='复盘日期 (格式: YYYY-MM-DD, 默认今天)')
-    parser.add_argument('--debug', action='store_true',
-                       help='启用调试日志')
+# ==================== 服务模式相关函数 ====================
+
+def execute_review_task(date: str = None, output_format: str = 'md') -> DailyReview:
+    """
+    执行复盘任务（用于定时任务）
+    同时保存到数据库和生成文件
     
-    args = parser.parse_args()
+    Args:
+        date: 复盘日期，默认今天
+        output_format: 输出格式
+        
+    Returns:
+        DailyReview对象
+    """
+    if date is None:
+        date = datetime.now().strftime('%Y-%m-%d')
     
-    # 设置日志级别
-    log_level = logging.DEBUG if args.debug else logging.INFO
-    setup_logger(level=log_level)
+    logger.info(f"执行定时复盘任务: {date}")
     
+    # 构建复盘数据
+    review = build_review_data(date)
+    
+    # 生成报告文件
+    generate_report(review, output_format)
+    
+    # 保存到数据库（如果服务模式模块可用）
+    if _service_modules_available:
+        try:
+            db = get_database()
+            if db.save_review(review):
+                logger.info(f"复盘数据已保存到数据库: {date}")
+            else:
+                logger.warning(f"复盘数据保存到数据库失败: {date}")
+        except Exception as e:
+            logger.error(f"保存到数据库失败: {e}")
+    else:
+        logger.warning("服务模式模块不可用，跳过数据库保存")
+    
+    return review
+
+
+def run_standalone_mode(args):
+    """
+    运行独立模式（原有命令行模式）
+    
+    Args:
+        args: 命令行参数
+        
+    Returns:
+        退出码
+    """
     logger.info("=" * 60)
-    logger.info("A股每日复盘报告生成器启动")
+    logger.info("运行模式: 独立模式 (Standalone)")
     logger.info("=" * 60)
     
     try:
@@ -472,6 +516,137 @@ def main():
     except Exception as e:
         logger.error(f"程序执行失败: {e}", exc_info=True)
         return 1
+
+
+def run_service_mode(args):
+    """
+    运行服务模式（定时任务 + Web管理端）
+    
+    Args:
+        args: 命令行参数
+        
+    Returns:
+        退出码
+    """
+    if not _service_modules_available:
+        logger.error("服务模式模块不可用，请检查依赖是否已安装")
+        logger.error("需要安装: flask, apscheduler, duckdb")
+        return 1
+    
+    logger.info("=" * 60)
+    logger.info("运行模式: 服务模式 (Service)")
+    logger.info("=" * 60)
+    
+    try:
+        # 获取配置
+        schedule_time = config.get('service.schedule_time', '21:00')
+        web_host = config.get('service.web_host', '0.0.0.0')
+        web_port = config.get('service.web_port', 5000)
+        
+        # 解析定时时间
+        try:
+            hour, minute = map(int, schedule_time.split(':'))
+        except ValueError:
+            logger.warning(f"无效的定时时间格式: {schedule_time}, 使用默认 21:00")
+            hour, minute = 21, 0
+        
+        logger.info(f"定时任务时间: 每日 {hour:02d}:{minute:02d}")
+        logger.info(f"Web服务地址: http://{web_host}:{web_port}")
+        
+        # 创建定时任务调度器
+        def scheduled_task():
+            """定时执行的任务"""
+            execute_review_task(output_format=args.format)
+        
+        scheduler = get_scheduler(execute_callback=scheduled_task)
+        scheduler.add_daily_task(hour=hour, minute=minute)
+        scheduler.start()
+        
+        # 创建Flask应用
+        app = create_app(debug=args.debug)
+        
+        # 在Flask启动前初始化数据库
+        get_database()
+        
+        logger.info("=" * 60)
+        logger.info("服务已启动")
+        logger.info(f"- 定时任务: 每日 {hour:02d}:{minute:02d}")
+        logger.info(f"- Web管理端: http://{web_host}:{web_port}")
+        logger.info("=" * 60)
+        logger.info("按 Ctrl+C 停止服务")
+        
+        # 运行Flask应用
+        # 使用threading让Flask在主线程运行，避免多线程问题
+        app.run(host=web_host, port=web_port, use_reloader=False, threaded=True)
+        
+        return 0
+        
+    except KeyboardInterrupt:
+        logger.info("\n正在停止服务...")
+        if _service_modules_available:
+            try:
+                scheduler = get_scheduler()
+                scheduler.stop()
+            except Exception:
+                pass
+        logger.info("服务已停止")
+        return 0
+    except Exception as e:
+        logger.error(f"服务运行失败: {e}", exc_info=True)
+        return 1
+
+
+def main():
+    """主函数"""
+    parser = argparse.ArgumentParser(description='A股每日复盘报告生成器')
+    
+    # 模式参数
+    parser.add_argument('--mode', choices=['standalone', 'service'], default='standalone',
+                       help='运行模式: standalone(独立模式，默认) 或 service(服务模式)')
+    
+    # 通用参数
+    parser.add_argument('--format', choices=['md', 'json', 'pdf', 'html'], default='md',
+                       help='输出格式 (默认: md)')
+    parser.add_argument('--output', type=str, default='',
+                       help='输出文件路径 (仅standalone模式有效，默认: output/review_YYYY-MM-DD.md)')
+    parser.add_argument('--date', type=str, default='',
+                       help='复盘日期 (仅standalone模式有效，格式: YYYY-MM-DD, 默认今天)')
+    parser.add_argument('--debug', action='store_true',
+                       help='启用调试日志')
+    
+    # 服务模式参数
+    parser.add_argument('--host', type=str, default='',
+                       help='Web服务监听地址 (仅service模式有效，默认: 0.0.0.0)')
+    parser.add_argument('--port', type=int, default=0,
+                       help='Web服务端口 (仅service模式有效，默认: 5000)')
+    parser.add_argument('--schedule-time', type=str, default='',
+                       help='定时任务时间 (仅service模式有效，格式: HH:MM，默认: 21:00)')
+    
+    args = parser.parse_args()
+    
+    # 设置日志级别
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    setup_logger(level=log_level)
+    
+    logger.info("=" * 60)
+    logger.info("A股每日复盘报告生成器启动")
+    logger.info(f"运行模式: {args.mode}")
+    logger.info("=" * 60)
+    
+    # 处理服务模式的额外参数
+    if args.mode == 'service':
+        if args.host:
+            config.set('service.web_host', args.host)
+        if args.port > 0:
+            config.set('service.web_port', args.port)
+        if args.schedule_time:
+            config.set('service.schedule_time', args.schedule_time)
+    
+    # 根据模式运行
+    if args.mode == 'service':
+        return run_service_mode(args)
+    else:
+        return run_standalone_mode(args)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+
+{% block title %}A股每日复盘 - 首页{% endblock %}
+
+{% block content %}
+<!-- 页面头部 -->
+<div class="page-header">
+    <h1 class="page-title">📈 A股每日复盘</h1>
+    <p class="page-subtitle">自动收集市场数据，生成专业复盘报告</p>
+</div>
+
+<!-- 统计卡片 -->
+<div class="grid-3" style="margin-bottom: 30px;">
+    <div class="stat-card">
+        <div class="value">{{ dates|length }}</div>
+        <div class="label">历史报告数</div>
+    </div>
+    <div class="stat-card">
+        <div class="value">{{ watchlist|length }}</div>
+        <div class="label">自选股数</div>
+    </div>
+    <div class="stat-card">
+        <div class="value">{{ latest_review.market.limit_up_count if latest_review else 0 }}</div>
+        <div class="label">最新涨停数</div>
+    </div>
+</div>
+
+<!-- 主内容区 -->
+<div class="content-sidebar">
+    <!-- 左侧内容 -->
+    <div>
+        <!-- 最新报告 -->
+        {% if latest_review %}
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">📊</span>
+                最新复盘报告 - {{ latest_review.date }}
+            </div>
+            
+            <!-- 市场概览 -->
+            <div class="grid-2" style="margin-bottom: 20px;">
+                <div class="stat-card" style="margin-bottom: 0;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                        <span>上涨</span>
+                        <span class="tag tag-up">{{ latest_review.market.up_count }} 只</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                        <span>下跌</span>
+                        <span class="tag tag-down">{{ latest_review.market.down_count }} 只</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span>涨跌比</span>
+                        <strong>{{ "%.2f"|format(latest_review.market.rise_fall_ratio) }}:1</strong>
+                    </div>
+                </div>
+                <div class="stat-card" style="margin-bottom: 0;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                        <span>涨停</span>
+                        <span class="tag tag-up">{{ latest_review.market.limit_up_count }} 只</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                        <span>跌停</span>
+                        <span class="tag tag-down">{{ latest_review.market.limit_down_count }} 只</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span>拥挤度</span>
+                        <strong>{{ "%.1f"|format(latest_review.market.congestion) }}%</strong>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 市场情绪 -->
+            <div style="padding: 20px; background: #f8f9fa; border-radius: 10px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: 600;">市场情绪</span>
+                    {% if latest_review.market.fear_index > 50 %}
+                    <span class="tag tag-up">🔴 恐慌</span>
+                    {% elif latest_review.market.greed_index > 50 %}
+                    <span class="tag tag-down">🟢 贪婪</span>
+                    {% else %}
+                    <span class="tag tag-neutral">🟡 中性</span>
+                    {% endif %}
+                </div>
+                <div style="display: flex; gap: 20px; margin-top: 15px;">
+                    <div>
+                        <div style="font-size: 0.85em; color: #666;">恐慌指数</div>
+                        <div style="font-size: 1.5em; font-weight: 700; color: #ff6b6b;">
+                            {{ "%.1f"|format(latest_review.market.fear_index) }}%
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.85em; color: #666;">贪婪指数</div>
+                        <div style="font-size: 1.5em; font-weight: 700; color: #51cf66;">
+                            {{ "%.1f"|format(latest_review.market.greed_index) }}%
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <a href="{{ url_for('review_detail', date=latest_review.date) }}" class="btn btn-primary">
+                查看完整报告 →
+            </a>
+        </div>
+        {% else %}
+        <div class="card">
+            <div class="empty-state">
+                <div class="icon">📭</div>
+                <p>暂无复盘报告</p>
+                <p style="color: #999; font-size: 0.9em;">请先运行复盘任务生成报告</p>
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- 人气排名TOP10 -->
+        {% if latest_review and latest_review.heat_ranks %}
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">🔥</span>
+                人气排名 TOP10
+            </div>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>排名</th>
+                            <th>代码</th>
+                            <th>名称</th>
+                            <th>热度分</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for rank in latest_review.heat_ranks[:10] %}
+                        <tr>
+                            <td style="font-weight: 700;">{{ loop.index }}</td>
+                            <td>{{ rank.code }}</td>
+                            <td><strong>{{ rank.name }}</strong></td>
+                            <td>{{ "%.1f"|format(rank.composite_score) }}</td>
+                            <td>
+                                <a href="{{ url_for('stock_detail_page', code=rank.code) }}" class="btn btn-sm btn-secondary">
+                                    详情
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    
+    <!-- 右侧侧边栏 -->
+    <div>
+        <!-- 历史报告列表 -->
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">📅</span>
+                历史报告
+            </div>
+            {% if dates %}
+            <ul class="sidebar-list">
+                {% for date in dates[:15] %}
+                <li>
+                    <a href="{{ url_for('review_detail', date=date) }}" 
+                       {% if latest_review and date == latest_review.date %}class="active"{% endif %}>
+                        {{ date }}
+                    </a>
+                </li>
+                {% endfor %}
+            </ul>
+            {% if dates|length > 15 %}
+            <div style="margin-top: 15px; text-align: center;">
+                <span style="color: #999; font-size: 0.85em;">还有 {{ dates|length - 15 }} 条报告...</span>
+            </div>
+            {% endif %}
+            {% else %}
+            <div style="text-align: center; padding: 30px 0; color: #999;">
+                暂无历史报告
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- 自选股预览 -->
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">⭐</span>
+                自选股
+                <span style="font-size: 0.8em; color: #999; font-weight: normal;">
+                    ({{ watchlist|length }})
+                </span>
+            </div>
+            {% if watchlist %}
+            <ul class="sidebar-list">
+                {% for stock in watchlist[:10] %}
+                <li>
+                    <a href="{{ url_for('stock_detail_page', code=stock.code) }}">
+                        <strong>{{ stock.name or stock.code }}</strong>
+                        <span style="color: #999; font-size: 0.85em;">{{ stock.code }}</span>
+                    </a>
+                </li>
+                {% endfor %}
+            </ul>
+            <div style="margin-top: 15px;">
+                <a href="{{ url_for('watchlist_page') }}" class="btn btn-sm btn-secondary" style="width: 100%;">
+                    管理自选股 →
+                </a>
+            </div>
+            {% else %}
+            <div style="text-align: center; padding: 30px 0; color: #999;">
+                暂无自选股
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

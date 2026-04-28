@@ -1,0 +1,358 @@
+{% extends "base.html" %}
+
+{% block title %}{{ detail.name if detail else code }} - 个股详情{% endblock %}
+
+{% block content %}
+<!-- 面包屑导航 -->
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">首页</a>
+    <span>→</span>
+    <a href="{{ url_for('watchlist_page') }}">自选股</a>
+    <span>→</span>
+    <span class="current">{{ detail.name if detail else code }}</span>
+</div>
+
+<!-- 页面头部 -->
+<div class="page-header">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 20px;">
+        <div>
+            <h1 class="page-title">
+                {{ detail.name if detail and detail.name else code }}
+                <span style="font-size: 0.6em; color: rgba(255,255,255,0.7); font-weight: normal;">
+                    {{ code }}
+                </span>
+            </h1>
+            {% if detail %}
+            <p class="page-subtitle">
+                最新价: <strong style="font-size: 1.2em;">{{ "%.2f"|format(detail.latest_price) }}</strong>
+                <span class="tag {% if detail.change_pct > 0 %}tag-up{% elif detail.change_pct < 0 %}tag-down{% else %}tag-neutral{% endif %}"
+                      style="margin-left: 10px; font-size: 1em;">
+                    {{ "%.2f"|format(detail.change_pct) }}%
+                </span>
+            </p>
+            {% endif %}
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button class="btn btn-secondary" onclick="refreshStock()">
+                🔄 刷新数据
+            </button>
+            <button class="btn btn-primary" onclick="addToWatchlist()">
+                ⭐ 加入自选
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- 主内容区 -->
+<div class="content-sidebar">
+    <!-- 左侧内容 -->
+    <div>
+        <!-- 个股点评 -->
+        {% if detail and detail.comment %}
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">📝</span>
+                个股点评
+                {% if detail.updated_at %}
+                <span style="font-size: 0.7em; color: #999; font-weight: normal;">
+                    更新于 {{ detail.updated_at.split(' ')[0] }}
+                </span>
+                {% endif %}
+            </div>
+            
+            {% set comment = detail.comment %}
+            
+            <!-- 综合评级 -->
+            {% if comment.overall_rating %}
+            <div style="padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; color: white; margin-bottom: 20px;">
+                <div style="font-size: 0.9em; opacity: 0.8; margin-bottom: 5px;">综合评级</div>
+                <div style="font-size: 1.5em; font-weight: 700;">{{ comment.overall_rating }}</div>
+            </div>
+            {% endif %}
+            
+            <!-- 诊断摘要 -->
+            {% if comment.summary %}
+            <div style="padding: 15px; background: #f8f9fa; border-radius: 8px; margin-bottom: 20px;">
+                <div style="font-weight: 600; margin-bottom: 8px;">📋 诊断摘要</div>
+                <p style="line-height: 1.6; color: #555;">{{ comment.summary }}</p>
+            </div>
+            {% endif %}
+            
+            <!-- 各维度分析 -->
+            <div class="grid-2">
+                {% if comment.technical_analysis %}
+                <div class="stat-card" style="margin-bottom: 0; text-align: left;">
+                    <div style="font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                        <span>📊</span> 技术面分析
+                    </div>
+                    <p style="line-height: 1.6; color: #555; font-size: 0.9em;">{{ comment.technical_analysis }}</p>
+                </div>
+                {% endif %}
+                
+                {% if comment.fundamental_analysis %}
+                <div class="stat-card" style="margin-bottom: 0; text-align: left;">
+                    <div style="font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                        <span>💼</span> 基本面分析
+                    </div>
+                    <p style="line-height: 1.6; color: #555; font-size: 0.9em;">{{ comment.fundamental_analysis }}</p>
+                </div>
+                {% endif %}
+                
+                {% if comment.news_analysis %}
+                <div class="stat-card" style="margin-bottom: 0; text-align: left; grid-column: 1 / -1;">
+                    <div style="font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                        <span>📰</span> 消息面分析
+                    </div>
+                    <p style="line-height: 1.6; color: #555; font-size: 0.9em;">{{ comment.news_analysis }}</p>
+                </div>
+                {% endif %}
+            </div>
+            
+            {% if not comment.technical_analysis and not comment.fundamental_analysis and not comment.news_analysis and not comment.summary and not comment.overall_rating %}
+            <div style="text-align: center; padding: 40px; color: #999;">
+                暂无点评数据
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        <!-- 相关资讯 -->
+        {% if detail and detail.news %}
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">📰</span>
+                相关资讯
+            </div>
+            
+            {% set news_list = detail.news %}
+            {% if news_list %}
+            <div style="display: flex; flex-direction: column; gap: 15px;">
+                {% for news in news_list[:20] %}
+                <div style="padding: 15px; background: #f8f9fa; border-radius: 8px; transition: all 0.2s ease;"
+                     onmouseover="this.style.background='#e9ecef'"
+                     onmouseout="this.style.background='#f8f9fa'">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 20px;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600; margin-bottom: 8px;">
+                                {% if news.url %}
+                                <a href="{{ news.url }}" target="_blank" style="color: #333; text-decoration: none;">
+                                    {{ news.title }}
+                                </a>
+                                {% else %}
+                                {{ news.title }}
+                                {% endif %}
+                            </div>
+                            {% if news.summary %}
+                            <div style="color: #666; font-size: 0.9em; line-height: 1.5;">
+                                {{ news.summary }}
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% if news.publish_time %}
+                        <div style="color: #999; font-size: 0.85em; white-space: nowrap;">
+                            {{ news.publish_time }}
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div style="display: flex; gap: 15px; margin-top: 10px;">
+                        {% if news.source %}
+                        <span style="color: #667eea; font-size: 0.85em;">
+                            📌 {{ news.source }}
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div style="text-align: center; padding: 40px; color: #999;">
+                暂无相关资讯
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        <!-- 历史数据分析 -->
+        {% if surge_history or heat_history %}
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">📈</span>
+                历史数据分析
+            </div>
+            
+            <div class="grid-2">
+                <!-- 涨停历史 -->
+                {% if surge_history %}
+                <div>
+                    <div style="font-weight: 600; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
+                        <span>🚀</span> 涨停历史 ({{ surge_history|length }}次)
+                    </div>
+                    <div class="table-wrapper">
+                        <table style="font-size: 0.85em;">
+                            <thead>
+                                <tr>
+                                    <th>日期</th>
+                                    <th>涨幅</th>
+                                    <th>涨停原因</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in surge_history[:10] %}
+                                <tr>
+                                    <td>{{ item.date }}</td>
+                                    <td><span class="tag tag-up">{{ "%.2f"|format(item.change_pct) }}%</span></td>
+                                    <td style="text-align: left; max-width: 200px;">{{ item.reason or '-' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {% endif %}
+                
+                <!-- 人气排名历史 -->
+                {% if heat_history %}
+                <div>
+                    <div style="font-weight: 600; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
+                        <span>🔥</span> 人气排名历史
+                    </div>
+                    <div class="table-wrapper">
+                        <table style="font-size: 0.85em;">
+                            <thead>
+                                <tr>
+                                    <th>日期</th>
+                                    <th>热度分</th>
+                                    <th>上榜次数</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in heat_history[:10] %}
+                                <tr>
+                                    <td>{{ item.date }}</td>
+                                    <td><strong>{{ "%.1f"|format(item.composite_score) }}</strong></td>
+                                    <td>{{ item.appear_count }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    
+    <!-- 右侧侧边栏 -->
+    <div>
+        <!-- 快速操作 -->
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">⚡</span>
+                快速操作
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+                <button class="btn btn-secondary" style="width: 100%; justify-content: flex-start;"
+                        onclick="location.href='{{ url_for('watchlist_page') }}'">
+                    📋 查看自选股
+                </button>
+                <button class="btn btn-secondary" style="width: 100%; justify-content: flex-start;"
+                        onclick="location.href='{{ url_for('index') }}'">
+                    🏠 返回首页
+                </button>
+            </div>
+        </div>
+        
+        <!-- 数据来源说明 -->
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">ℹ️</span>
+                数据说明
+            </div>
+            <div style="font-size: 0.9em; color: #666; line-height: 1.8;">
+                <p><strong>数据来源:</strong></p>
+                <ul style="margin: 10px 0 10px 20px;">
+                    <li>个股点评: 同花顺</li>
+                    <li>相关资讯: 同花顺</li>
+                    <li>历史数据: 本地数据库</li>
+                </ul>
+                <p><strong>更新频率:</strong></p>
+                <ul style="margin: 10px 0 0 20px;">
+                    <li>实时数据: 点击刷新获取</li>
+                    <li>历史数据: 每日复盘后更新</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 如果没有数据，显示提示 -->
+{% if not detail %}
+<div class="card">
+    <div class="empty-state">
+        <div class="icon">🔍</div>
+        <p>暂无该股票的详细数据</p>
+        <p style="color: #999; font-size: 0.9em; margin-bottom: 20px;">
+            点击下方按钮尝试从网络获取最新数据
+        </p>
+        <button class="btn btn-primary" onclick="refreshStock()">
+            🔄 获取数据
+        </button>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 刷新股票数据
+async function refreshStock() {
+    const code = '{{ code }}';
+    
+    try {
+        showToast('正在获取最新数据...', 'warning');
+        
+        const response = await fetch('/api/stock/' + code + '/refresh');
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast('数据已刷新', 'success');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showToast(result.message, 'error');
+        }
+    } catch (error) {
+        showToast('刷新失败：' + error.message, 'error');
+    }
+}
+
+// 添加到自选股
+async function addToWatchlist() {
+    const code = '{{ code }}';
+    const name = '{{ detail.name if detail and detail.name else "" }}';
+    
+    try {
+        const response = await fetch('/api/watchlist', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                code: code,
+                name: name
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast(result.message, 'success');
+        } else {
+            showToast(result.message, 'error');
+        }
+    } catch (error) {
+        showToast('添加失败：' + error.message, 'error');
+    }
+}
+</script>
+{% endblock %}

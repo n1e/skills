@@ -30,5 +30,10 @@
     "skill_name": "基本资料查询",
     "prefer_openapi": true,
     "prefer_cli": true
+  },
+  "service": {
+    "schedule_time": "21:00",
+    "web_host": "0.0.0.0",
+    "web_port": 5000
   }
 }
