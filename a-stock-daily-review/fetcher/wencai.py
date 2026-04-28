@@ -7,11 +7,18 @@
 旧 URL 方式和 CLI 方式已移除，因为接口已过期
 
 需要配置 IWENCAI_API_KEY 环境变量或在 config.json 中配置
+
+严格遵循 Iwencai (问财) OpenAPI 网关规范：
+- 每次请求携带 8 个 X-Claw-* Header
+- X-Claw-Trace-Id 为每次新生成的 64 字符十六进制唯一 ID
+- Authorization Bearer 仅从环境变量 IWENCAI_API_KEY 读取
+- 优先使用 POST
 """
 
 import json
 import os
 import re
+import secrets
 import sys
 from typing import List, Dict, Any, Optional
 
@@ -26,6 +33,18 @@ try:
 except ImportError:
     global_config = None
 
+SKILL_NAME = "a-stock-daily-review"
+SKILL_VERSION = "1.0.0"
+DEFAULT_API_URL = "https://openapi.iwencai.com/v1/query2data"
+DEFAULT_PAGE = "1"
+DEFAULT_LIMIT = "10"
+DEFAULT_TIMEOUT = 30
+
+
+def generate_trace_id() -> str:
+    """生成 64 字符十六进制全局唯一追踪 ID。"""
+    return secrets.token_hex(32)
+
 
 def get_wencai_config() -> Dict[str, Any]:
     """获取问财配置
@@ -34,7 +53,7 @@ def get_wencai_config() -> Dict[str, Any]:
     """
     config_dict = {
         'api_key': '',
-        'skill_name': '基本资料查询',
+        'skill_name': SKILL_NAME,
     }
     
     env_api_key = os.environ.get('IWENCAI_API_KEY', '')
@@ -51,6 +70,20 @@ def get_wencai_config() -> Dict[str, Any]:
             config_dict['skill_name'] = skill_name
     
     return config_dict
+
+
+def build_headers(api_key: str, trace_id: str, skill_name: str, skill_version: str, call_type: str = "normal") -> dict:
+    """构造符合问财网关规范的请求头。"""
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "X-Claw-Call-Type": call_type,
+        "X-Claw-Skill-Id": skill_name,
+        "X-Claw-Skill-Version": skill_version,
+        "X-Claw-Plugin-Id": "none",
+        "X-Claw-Plugin-Version": "none",
+        "X-Claw-Trace-Id": trace_id,
+    }
 
 
 def check_api_key_configured() -> bool:
@@ -106,18 +139,21 @@ class WencaiOpenAPI:
     使用 https://openapi.iwencai.com/v1/query2data 进行数据查询
     这是当前唯一支持的方式
     
-    参考：基本资料查询 skill 中的实现
+    严格遵循 Iwencai (问财) OpenAPI 网关规范：
+    - 每次请求携带 8 个 X-Claw-* Header
+    - X-Claw-Trace-Id 为每次新生成的 64 字符十六进制唯一 ID
     """
     
     DEFAULT_API_URL = "https://openapi.iwencai.com/v1/query2data"
     DEFAULT_PAGE = "1"
     DEFAULT_LIMIT = "10"
-    DEFAULT_IS_CACHE = "1"
-    DEFAULT_EXPAND_INDEX = "true"
+    DEFAULT_TIMEOUT = 30
     
-    def __init__(self):
+    def __init__(self, skill_name: str = None, skill_version: str = None):
         self._config = get_wencai_config()
         self._api_key = self._config.get('api_key', '')
+        self._skill_name = skill_name or self._config.get('skill_name', SKILL_NAME)
+        self._skill_version = skill_version or SKILL_VERSION
         self._available = None
     
     def _check_available(self) -> bool:
@@ -136,10 +172,10 @@ class WencaiOpenAPI:
             return False
         
         self._available = True
-        logger.info("问财 OpenAPI 可用")
+        logger.info(f"问财 OpenAPI 可用 (skill: {self._skill_name})")
         return self._available
     
-    def query(self, query: str, page: str = None, limit: str = None) -> Optional[Dict]:
+    def query(self, query: str, page: str = None, limit: str = None, call_type: str = "normal") -> Optional[Dict]:
         """
         使用 OpenAPI 执行查询
         
@@ -147,6 +183,7 @@ class WencaiOpenAPI:
             query: 查询字符串
             page: 分页参数
             limit: 每页条数
+            call_type: 调用类型，normal 或 retry
             
         Returns:
             包含 datas、code_count、chunks_info 等字段的字典，失败返回 None
@@ -157,63 +194,82 @@ class WencaiOpenAPI:
         
         page = page or self.DEFAULT_PAGE
         limit = limit or self.DEFAULT_LIMIT
+        trace_id = generate_trace_id()
         
         payload = {
             "query": query,
             "page": page,
             "limit": limit,
-            "is_cache": self.DEFAULT_IS_CACHE,
-            "expand_index": self.DEFAULT_EXPAND_INDEX
+            "is_cache": "1",
+            "expand_index": "true",
         }
         
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json"
-        }
+        headers = build_headers(
+            api_key=self._api_key,
+            trace_id=trace_id,
+            skill_name=self._skill_name,
+            skill_version=self._skill_version,
+            call_type=call_type
+        )
         
         try:
-            logger.info(f"使用问财 OpenAPI 查询: {query} (page={page}, limit={limit})")
+            logger.info(f"使用问财 OpenAPI 查询: {query} (page={page}, limit={limit}, trace_id={trace_id})")
             
             resp = requests.post(
                 self.DEFAULT_API_URL,
                 headers=headers,
                 json=payload,
-                timeout=30
+                timeout=self.DEFAULT_TIMEOUT
             )
             
             logger.info(f"API 响应状态码: {resp.status_code}")
-            logger.info(f"API 响应头: {dict(resp.headers)}")
             
-            raw_text = resp.text
-            logger.info(f"API 原始响应内容 (前500字符): {raw_text[:500] if len(raw_text) > 500 else raw_text}")
+            response_body = resp.text
             
-            result = resp.json()
+            if not response_body.strip():
+                logger.warning("API 返回空响应")
+                return None
             
-            if isinstance(result, dict):
-                status_code = result.get("status_code", 0)
-                if status_code != 0:
-                    status_msg = result.get("status_msg", "未知错误")
-                    logger.warning(f"OpenAPI 返回错误: status_code={status_code}, msg={status_msg}")
-                    return None
+            try:
+                result = json.loads(response_body)
                 
-                return {
-                    "datas": result.get("datas", []),
-                    "code_count": result.get("code_count", 0),
-                    "chunks_info": result.get("chunks_info", {}),
-                    "status_code": 0
-                }
-            
-            return None
+                if isinstance(result, dict):
+                    status_code = result.get("status_code", 0)
+                    if status_code != 0:
+                        status_msg = result.get("status_msg", "未知错误")
+                        logger.warning(f"OpenAPI 返回错误: status_code={status_code}, msg={status_msg}")
+                        return None
+                    
+                    result["trace_id"] = trace_id
+                    return {
+                        "datas": result.get("datas", []),
+                        "code_count": result.get("code_count", 0),
+                        "chunks_info": result.get("chunks_info", {}),
+                        "trace_id": trace_id,
+                        "status_code": 0
+                    }
+                
+                elif isinstance(result, list):
+                    return {
+                        "data": result,
+                        "trace_id": trace_id,
+                        "datas": result,
+                        "code_count": len(result),
+                        "status_code": 0
+                    }
+                
+                return None
+                
+            except json.JSONDecodeError as e:
+                logger.warning(f"API 响应不是有效 JSON: {e}")
+                if len(response_body) < 500:
+                    logger.warning(f"响应内容: {response_body}")
+                else:
+                    logger.warning(f"响应内容 (前500字符): {response_body[:500]}")
+                return None
             
         except requests.exceptions.RequestException as e:
             logger.warning(f"OpenAPI 请求失败: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            logger.warning(f"OpenAPI 响应解析失败: {e}")
-            try:
-                logger.warning(f"无法解析的响应内容: {resp.text[:1000] if 'resp' in dir() else '无法获取响应'}")
-            except Exception:
-                pass
             return None
         except Exception as e:
             logger.warning(f"OpenAPI 查询异常: {e}")
@@ -232,13 +288,17 @@ class WencaiFetcher:
     旧 URL 方式和 CLI 方式已移除
     """
     
-    def __init__(self):
+    def __init__(self, skill_name: str = None, skill_version: str = None):
         self._config = get_wencai_config()
-        self._skill_name = self._config.get('skill_name', '基本资料查询')
+        self._skill_name = skill_name or self._config.get('skill_name', SKILL_NAME)
+        self._skill_version = skill_version or SKILL_VERSION
         
-        self._openapi = WencaiOpenAPI()
+        self._openapi = WencaiOpenAPI(
+            skill_name=self._skill_name,
+            skill_version=self._skill_version
+        )
     
-    def query(self, question: str, perpage: int = 100) -> dict:
+    def query(self, question: str, perpage: int = 100, call_type: str = "normal") -> dict:
         """
         执行问财查询
         
@@ -247,12 +307,13 @@ class WencaiFetcher:
         Args:
             question: 查询问题
             perpage: 每页条数
+            call_type: 调用类型，normal 或 retry
             
         Returns:
             查询结果字典，如果 API 不可用返回空字典
         """
         if self._openapi.is_available():
-            result = self._openapi.query(question, limit=str(perpage))
+            result = self._openapi.query(question, limit=str(perpage), call_type=call_type)
             if result:
                 return self._convert_openapi_result(result)
         
@@ -268,6 +329,7 @@ class WencaiFetcher:
             "datas": [...],
             "code_count": N,
             "chunks_info": {},
+            "trace_id": "...",
             "status_code": 0
         }
         

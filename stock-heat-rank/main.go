@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	crand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,6 +16,15 @@ import (
 	"sort"
 	"strings"
 	"time"
+)
+
+const (
+	SKILL_NAME     = "stock-heat-rank"
+	SKILL_VERSION  = "1.0.0"
+	DEFAULT_API_URL = "https://openapi.iwencai.com/v1/query2data"
+	DEFAULT_PAGE    = "1"
+	DEFAULT_LIMIT   = "10"
+	DEFAULT_TIMEOUT = 30
 )
 
 // StockRank 股票排名信息
@@ -36,19 +47,66 @@ type CompositeRank struct {
 	AppearCount    int     `json:"appear_count"`
 }
 
-// WencaiOpenAPI 问财 OpenAPI 客户端
+// generateTraceID 生成 64 字符十六进制全局唯一追踪 ID
+func generateTraceID() string {
+	bytes := make([]byte, 32)
+	crand.Read(bytes)
+	return hex.EncodeToString(bytes)
+}
+
+// buildHeaders 构造符合问财网关规范的请求头
+func buildHeaders(apiKey, traceID, skillName, skillVersion, callType string) map[string]string {
+	return map[string]string{
+		"Authorization":       "Bearer " + apiKey,
+		"Content-Type":        "application/json",
+		"X-Claw-Call-Type":    callType,
+		"X-Claw-Skill-Id":     skillName,
+		"X-Claw-Skill-Version": skillVersion,
+		"X-Claw-Plugin-Id":    "none",
+		"X-Claw-Plugin-Version": "none",
+		"X-Claw-Trace-Id":     traceID,
+	}
+}
+
+// getAPIKey 获取问财 API Key
+func getAPIKey() string {
+	return os.Getenv("IWENCAI_API_KEY")
+}
+
+// checkAPIKeyConfigured 检查 API Key 是否已配置
+func checkAPIKeyConfigured() bool {
+	apiKey := getAPIKey()
+	if apiKey == "" {
+		return false
+	}
+	if apiKey == "sk-proj-00" {
+		return false
+	}
+	return true
+}
+
+// WencaiOpenAPI 问财官方 OpenAPI 客户端
 type WencaiOpenAPI struct {
-	apiKey    string
-	available bool
-	checked   bool
+	apiKey       string
+	skillName    string
+	skillVersion string
+	available    bool
+	checked      bool
 }
 
 // NewWencaiOpenAPI 创建问财 OpenAPI 客户端
-func NewWencaiOpenAPI() *WencaiOpenAPI {
-	apiKey := os.Getenv("IWENCAI_API_KEY")
+func NewWencaiOpenAPI(skillName, skillVersion string) *WencaiOpenAPI {
+	if skillName == "" {
+		skillName = SKILL_NAME
+	}
+	if skillVersion == "" {
+		skillVersion = SKILL_VERSION
+	}
 	return &WencaiOpenAPI{
-		apiKey:  apiKey,
-		checked: false,
+		apiKey:       getAPIKey(),
+		skillName:    skillName,
+		skillVersion: skillVersion,
+		checked:      false,
 	}
 }
 
@@ -78,16 +136,17 @@ func (api *WencaiOpenAPI) IsAvailable() bool {
 }
 
 // Query 执行查询
-func (api *WencaiOpenAPI) Query(query string, limit int) (map[string]interface{}, error) {
+func (api *WencaiOpenAPI) Query(query string, limit int, callType string) (map[string]interface{}, error) {
 	if !api.IsAvailable() {
 		return nil, fmt.Errorf("OpenAPI 不可用")
 	}
 
-	apiURL := "https://openapi.iwencai.com/v1/query2data"
+	apiURL := DEFAULT_API_URL
+	traceID := generateTraceID()
 
 	payload := map[string]interface{}{
 		"query":        query,
-		"page":         "1",
+		"page":         DEFAULT_PAGE,
 		"limit":        fmt.Sprintf("%d", limit),
 		"is_cache":     "1",
 		"expand_index": "true",
@@ -100,15 +159,16 @@ func (api *WencaiOpenAPI) Query(query string, limit int) (map[string]interface{}
 		return nil, fmt.Errorf("创建请求失败: %v", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+api.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
-
-	client := &http.Client{
-		Timeout: 30 * time.Second,
+	headers := buildHeaders(api.apiKey, traceID, api.skillName, api.skillVersion, callType)
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
-	fmt.Printf("  使用问财 OpenAPI 查询: %s\n", query)
+	client := &http.Client{
+		Timeout: DEFAULT_TIMEOUT * time.Second,
+	}
+
+	fmt.Printf("  使用问财 OpenAPI 查询: %s (trace_id=%s)\n", query, traceID)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -117,26 +177,33 @@ func (api *WencaiOpenAPI) Query(query string, limit int) (map[string]interface{}
 	defer resp.Body.Close()
 
 	fmt.Printf("  API 响应状态码: %d\n", resp.StatusCode)
-	fmt.Printf("  API 响应头: %v\n", resp.Header)
 
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
-	if len(bodyStr) > 500 {
-		bodyStr = bodyStr[:500]
+
+	if len(bodyStr) == 0 {
+		fmt.Println("  [警告] API 返回空响应")
+		return nil, fmt.Errorf("空响应")
 	}
-	fmt.Printf("  API 原始响应内容 (前500字符): %s\n", bodyStr)
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %v, 原始响应: %s", err, string(body))
+		fmt.Printf("  [警告] API 响应不是有效 JSON: %v\n", err)
+		if len(bodyStr) < 500 {
+			fmt.Printf("  响应内容: %s\n", bodyStr)
+		} else {
+			fmt.Printf("  响应内容 (前500字符): %s\n", bodyStr[:500])
+		}
+		return nil, fmt.Errorf("JSON 解析失败: %v", err)
 	}
 
-	statusCode, ok := result["status_code"].(float64)
-	if ok && statusCode != 0 {
+	if statusCode, ok := result["status_code"].(float64); ok && statusCode != 0 {
 		statusMsg, _ := result["status_msg"].(string)
-		return nil, fmt.Errorf("API 返回错误: status_code=%v, msg=%s", statusCode, statusMsg)
+		fmt.Printf("  [警告] OpenAPI 返回错误: status_code=%v, msg=%s\n", statusCode, statusMsg)
+		return nil, fmt.Errorf("API 返回错误: %s", statusMsg)
 	}
 
+	result["trace_id"] = traceID
 	return result, nil
 }
 
@@ -148,20 +215,20 @@ type WencaiFetcher struct {
 // NewWencaiFetcher 创建问财采集器
 func NewWencaiFetcher() *WencaiFetcher {
 	return &WencaiFetcher{
-		openapi: NewWencaiOpenAPI(),
+		openapi: NewWencaiOpenAPI("", ""),
 	}
 }
 
 // Fetch 获取问财人气排名
 func (f *WencaiFetcher) Fetch(top int) ([]StockRank, error) {
-	fmt.Println("→ 问财人气排名采集...")
+	fmt.Println("【问财】正在采集...")
 
 	if !f.openapi.IsAvailable() {
 		return nil, fmt.Errorf("OpenAPI 不可用")
 	}
 
 	query := fmt.Sprintf("人气排名前%d", top)
-	result, err := f.openapi.Query(query, top)
+	result, err := f.openapi.Query(query, top, "normal")
 	if err != nil {
 		return nil, err
 	}
@@ -610,17 +677,6 @@ func printJSON(ranks []CompositeRank, top int) {
 	fmt.Println(string(jsonData))
 }
 
-func checkAPIKeyConfigured() bool {
-	apiKey := os.Getenv("IWENCAI_API_KEY")
-	if apiKey == "" {
-		return false
-	}
-	if apiKey == "sk-proj-00" {
-		return false
-	}
-	return true
-}
-
 func printAPIKeyReminder() {
 	fmt.Println("=")
 	fmt.Println("⚠️  问财 API Key 未配置！")
@@ -661,33 +717,42 @@ func main() {
 		fmt.Println()
 	}
 
-	fmt.Println("【问财】正在采集...")
-	wencaiClient := NewWencaiFetcher()
-	wencaiRanks, err := wencaiClient.Fetch(50)
+	// 采集问财数据
+	wencaiRanks := make([]StockRank, 0)
+	wencaiFetcher := NewWencaiFetcher()
+	ranks, err := wencaiFetcher.Fetch(50)
 	if err != nil {
-		fmt.Printf("  采集失败: %v\n", err)
+		fmt.Printf("【问财】采集失败: %v\n", err)
 	} else {
-		fmt.Printf("  成功获取 %d 只股票\n", len(wencaiRanks))
+		wencaiRanks = ranks
+		fmt.Printf("【问财】成功获取 %d 只股票\n", len(wencaiRanks))
 	}
 
+	// 采集雪球数据
 	fmt.Println("\n【雪球】正在采集...")
+	xueqiuRanks := make([]StockRank, 0)
 	xueqiuFetcher := NewXueqiuFetcher()
-	xueqiuRanks, err := xueqiuFetcher.Fetch()
+	ranks, err = xueqiuFetcher.Fetch()
 	if err != nil {
 		fmt.Printf("  采集失败: %v\n", err)
 	} else {
+		xueqiuRanks = ranks
 		fmt.Printf("  成功获取 %d 只A股\n", len(xueqiuRanks))
 	}
 
+	// 采集东财数据
 	fmt.Println("\n【东财】正在采集...")
+	eastmoneyRanks := make([]StockRank, 0)
 	eastmoneyFetcher := NewEastmoneyFetcher()
-	eastmoneyRanks, err := eastmoneyFetcher.Fetch()
+	ranks, err = eastmoneyFetcher.Fetch()
 	if err != nil {
 		fmt.Printf("  采集失败: %v\n", err)
 	} else {
+		eastmoneyRanks = ranks
 		fmt.Printf("  成功获取 %d 只股票\n", len(eastmoneyRanks))
 	}
 
+	// 计算复合热度
 	fmt.Println("\n=== 复合热度排名 ===")
 	fmt.Printf("问财: %d | 雪球: %d | 东财: %d\n", len(wencaiRanks), len(xueqiuRanks), len(eastmoneyRanks))
 
