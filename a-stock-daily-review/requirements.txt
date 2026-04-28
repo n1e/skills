@@ -5,6 +5,11 @@ jieba>=0.42.1
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
 
+# 服务模式依赖
+flask>=2.3.0
+duckdb>=0.9.0
+apscheduler>=3.10.0
+
 # 可选依赖（增强功能）
 # tenacity>=8.0.0  # 更强大的重试机制（如需要可使用）
 # akshare  # 市场新闻情绪指标（需独立安装）

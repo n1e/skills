@@ -1,0 +1,300 @@
+{% extends "base.html" %}
+
+{% block title %}自选股管理{% endblock %}
+
+{% block content %}
+<!-- 页面头部 -->
+<div class="page-header">
+    <h1 class="page-title">⭐ 自选股管理</h1>
+    <p class="page-subtitle">管理您关注的股票，实时查看个股详情</p>
+</div>
+
+<!-- 操作栏 -->
+<div class="card" style="padding: 20px; margin-bottom: 30px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px;">
+        <div style="display: flex; gap: 15px; align-items: center;">
+            <button class="btn btn-primary" onclick="showModal('addStockModal')">
+                ➕ 添加股票
+            </button>
+            <button class="btn btn-secondary" onclick="showModal('batchAddModal')">
+                📋 批量添加
+            </button>
+        </div>
+        <div style="color: #666;">
+            共 <strong style="color: #667eea; font-size: 1.2em;">{{ watchlist|length }}</strong> 只自选股
+        </div>
+    </div>
+</div>
+
+<!-- 自选股列表 -->
+{% if watchlist %}
+<div class="card">
+    <div class="card-title">
+        <span class="icon">📋</span>
+        我的自选股
+    </div>
+    
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>代码</th>
+                    <th>名称</th>
+                    <th>最新价</th>
+                    <th>涨跌幅</th>
+                    <th>添加时间</th>
+                    <th>备注</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for stock in watchlist %}
+                <tr>
+                    <td><strong>{{ stock.code }}</strong></td>
+                    <td>{{ stock.name or '-' }}</td>
+                    <td>
+                        {% if stock.latest_price > 0 %}
+                        <strong>{{ "%.2f"|format(stock.latest_price) }}</strong>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if stock.change_pct != 0 %}
+                        <span class="tag {% if stock.change_pct > 0 %}tag-up{% else %}tag-down{% endif %}">
+                            {{ "%.2f"|format(stock.change_pct) }}%
+                        </span>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                    <td style="font-size: 0.85em; color: #666;">
+                        {{ stock.added_at.split(' ')[0] if stock.added_at else '-' }}
+                    </td>
+                    <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        {{ stock.notes or '-' }}
+                    </td>
+                    <td>
+                        <div style="display: flex; gap: 8px; justify-content: center;">
+                            <a href="{{ url_for('stock_detail_page', code=stock.code) }}" class="btn btn-sm btn-secondary">
+                                详情
+                            </a>
+                            <button class="btn btn-sm btn-danger" onclick="removeStock('{{ stock.code }}')">
+                                移除
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <div class="icon">💼</div>
+        <p>暂无自选股</p>
+        <p style="color: #999; font-size: 0.9em; margin-bottom: 20px;">
+            添加您关注的股票，方便后续查看和分析
+        </p>
+        <button class="btn btn-primary" onclick="showModal('addStockModal')">
+            ➕ 添加第一只股票
+        </button>
+    </div>
+</div>
+{% endif %}
+
+<!-- 添加股票模态框 -->
+<div class="modal-overlay" id="addStockModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">添加自选股</h3>
+            <button class="modal-close" onclick="hideModal('addStockModal')">&times;</button>
+        </div>
+        <form id="addStockForm">
+            <div class="form-group">
+                <label class="form-label">股票代码 *</label>
+                <input type="text" class="form-input" id="stockCode" name="code" 
+                       placeholder="请输入股票代码，如：000001" required>
+                <small style="color: #666; font-size: 0.85em;">支持6位股票代码</small>
+            </div>
+            <div class="form-group">
+                <label class="form-label">股票名称（可选）</label>
+                <input type="text" class="form-input" id="stockName" name="name" 
+                       placeholder="股票名称将自动获取">
+            </div>
+            <div class="form-group">
+                <label class="form-label">备注（可选）</label>
+                <textarea class="form-input form-textarea" id="stockNotes" name="notes" 
+                          placeholder="添加备注信息"></textarea>
+            </div>
+            <div style="display: flex; gap: 15px; justify-content: flex-end;">
+                <button type="button" class="btn btn-secondary" onclick="hideModal('addStockModal')">
+                    取消
+                </button>
+                <button type="submit" class="btn btn-primary">
+                    添加
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 批量添加模态框 -->
+<div class="modal-overlay" id="batchAddModal">
+    <div class="modal" style="max-width: 600px;">
+        <div class="modal-header">
+            <h3 class="modal-title">批量添加自选股</h3>
+            <button class="modal-close" onclick="hideModal('batchAddModal')">&times;</button>
+        </div>
+        <form id="batchAddForm">
+            <div class="form-group">
+                <label class="form-label">股票代码列表</label>
+                <textarea class="form-input form-textarea" id="batchCodes" name="codes" 
+                          placeholder="每行一个股票代码，格式：
+000001 平安银行
+600519 贵州茅台
+或仅输入代码：
+000001
+600519" 
+                          style="min-height: 200px;" required></textarea>
+                <small style="color: #666; font-size: 0.85em;">
+                    每行一个股票，支持"代码 名称"或仅代码格式
+                </small>
+            </div>
+            <div style="display: flex; gap: 15px; justify-content: flex-end;">
+                <button type="button" class="btn btn-secondary" onclick="hideModal('batchAddModal')">
+                    取消
+                </button>
+                <button type="submit" class="btn btn-primary">
+                    批量添加
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 添加股票表单提交
+document.getElementById('addStockForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const code = document.getElementById('stockCode').value.trim();
+    const name = document.getElementById('stockName').value.trim();
+    const notes = document.getElementById('stockNotes').value.trim();
+    
+    if (!code) {
+        showToast('请输入股票代码', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/watchlist', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                code: code,
+                name: name,
+                notes: notes
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast(result.message, 'success');
+            hideModal('addStockModal');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showToast(result.message, 'error');
+        }
+    } catch (error) {
+        showToast('添加失败：' + error.message, 'error');
+    }
+});
+
+// 批量添加表单提交
+document.getElementById('batchAddForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const codesText = document.getElementById('batchCodes').value.trim();
+    if (!codesText) {
+        showToast('请输入股票代码', 'error');
+        return;
+    }
+    
+    // 解析每行
+    const lines = codesText.split('\n').filter(line => line.trim());
+    const stocks = [];
+    
+    for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 1) {
+            const code = parts[0].replace(/\D/g, ''); // 只保留数字
+            if (code.length === 6) {
+                stocks.push({
+                    code: code,
+                    name: parts.slice(1).join(' ') || ''
+                });
+            }
+        }
+    }
+    
+    if (stocks.length === 0) {
+        showToast('未能解析到有效的股票代码', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/watchlist/batch', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ stocks: stocks })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast(result.message, 'success');
+            hideModal('batchAddModal');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showToast(result.message, 'error');
+        }
+    } catch (error) {
+        showToast('批量添加失败：' + error.message, 'error');
+    }
+});
+
+// 移除股票
+async function removeStock(code) {
+    if (!confirm('确定要移除该股票吗？')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/watchlist/' + code, {
+            method: 'DELETE'
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast(result.message, 'success');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showToast(result.message, 'error');
+        }
+    } catch (error) {
+        showToast('移除失败：' + error.message, 'error');
+    }
+}
+</script>
+{% endblock %}

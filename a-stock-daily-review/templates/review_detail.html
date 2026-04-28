@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}复盘报告 - {{ review.date }}{% endblock %}
+
+{% block content %}
+<!-- 面包屑导航 -->
+<div class="breadcrumb">
+    <a href="{{ url_for('index') }}">首页</a>
+    <span>→</span>
+    <span class="current">{{ review.date }} 复盘报告</span>
+</div>
+
+<!-- 页面头部 -->
+<div class="page-header">
+    <h1 class="page-title">📊 {{ review.date }} 复盘报告</h1>
+</div>
+
+<!-- 日期选择器 -->
+{% if dates %}
+<div class="card" style="padding: 15px 20px; margin-bottom: 30px;">
+    <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+        <span style="font-weight: 600;">选择日期:</span>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            {% for date in dates[:10] %}
+            <a href="{{ url_for('review_detail', date=date) }}" 
+               class="btn btn-sm {% if date == review.date %}btn-primary{% else %}btn-secondary{% endif %}">
+                {{ date }}
+            </a>
+            {% endfor %}
+            {% if dates|length > 10 %}
+            <span style="color: #999; padding: 8px 0;">...</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- 市场数据概览 -->
+<div class="grid-2" style="margin-bottom: 30px;">
+    <div class="card">
+        <div class="card-title">
+            <span class="icon">📈</span>
+            市场概览
+        </div>
+        <div class="grid-2">
+            <div class="stat-card" style="margin-bottom: 0;">
+                <div class="value" style="color: #ff6b6b;">{{ review.market.up_count }}</div>
+                <div class="label">上涨家数</div>
+            </div>
+            <div class="stat-card" style="margin-bottom: 0;">
+                <div class="value" style="color: #51cf66;">{{ review.market.down_count }}</div>
+                <div class="label">下跌家数</div>
+            </div>
+            <div class="stat-card" style="margin-bottom: 0;">
+                <div class="value" style="color: #ff6b6b;">{{ review.market.limit_up_count }}</div>
+                <div class="label">涨停家数</div>
+            </div>
+            <div class="stat-card" style="margin-bottom: 0;">
+                <div class="value" style="color: #51cf66;">{{ review.market.limit_down_count }}</div>
+                <div class="label">跌停家数</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <div class="card-title">
+            <span class="icon">🎭</span>
+            市场情绪
+        </div>
+        <div style="padding: 20px; background: #f8f9fa; border-radius: 10px; margin-bottom: 15px;">
+            {% if review.market.fear_index > 50 %}
+            <div style="text-align: center; color: #ff6b6b; font-weight: 700; font-size: 1.2em;">
+                🔴 市场恐慌情绪较强
+            </div>
+            {% elif review.market.greed_index > 50 %}
+            <div style="text-align: center; color: #51cf66; font-weight: 700; font-size: 1.2em;">
+                🟢 市场贪婪情绪较强
+            </div>
+            {% else %}
+            <div style="text-align: center; color: #fcc419; font-weight: 700; font-size: 1.2em;">
+                🟡 市场情绪中性
+            </div>
+            {% endif %}
+        </div>
+        <div class="grid-2">
+            <div class="stat-card" style="margin-bottom: 0;">
+                <div class="value" style="color: #ff6b6b;">{{ "%.1f"|format(review.market.fear_index) }}%</div>
+                <div class="label">恐慌指数</div>
+            </div>
+            <div class="stat-card" style="margin-bottom: 0;">
+                <div class="value" style="color: #51cf66;">{{ "%.1f"|format(review.market.greed_index) }}%</div>
+                <div class="label">贪婪指数</div>
+            </div>
+        </div>
+        <div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                <span>涨跌比</span>
+                <strong>{{ "%.2f"|format(review.market.rise_fall_ratio) }}:1</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                <span>涨跌停比</span>
+                <strong>{{ "%.2f"|format(review.market.limit_ratio) }}:1</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span>大盘拥挤度</span>
+                <strong>{{ "%.1f"|format(review.market.congestion) }}%</strong>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 涨停分析 -->
+{% if review.surge_stocks %}
+<div class="card">
+    <div class="card-title">
+        <span class="icon">🚀</span>
+        涨停分析 ({{ review.surge_stocks|length }}只)
+    </div>
+    
+    {% set sorted_stocks = review.surge_stocks|sort(attribute='change_pct', reverse=true) %}
+    
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>序号</th>
+                    <th>代码</th>
+                    <th>名称</th>
+                    <th>最新价</th>
+                    <th>涨幅</th>
+                    <th>涨停原因</th>
+                    <th>分类</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for stock in sorted_stocks[:50] %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>{{ stock.code }}</td>
+                    <td><strong>{{ stock.name }}</strong></td>
+                    <td>{{ "%.2f"|format(stock.price) }}</td>
+                    <td><span class="tag tag-up">{{ "%.2f"|format(stock.change_pct) }}%</span></td>
+                    <td style="text-align: left; max-width: 300px;">{{ stock.reason or '-' }}</td>
+                    <td>{{ stock.reason_category or '-' }}</td>
+                    <td>
+                        <a href="{{ url_for('stock_detail_page', code=stock.code) }}" class="btn btn-sm btn-secondary">
+                            详情
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    {% if sorted_stocks|length > 50 %}
+    <div style="margin-top: 15px; text-align: center; color: #999;">
+        还有 {{ sorted_stocks|length - 50 }} 只涨停股...
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- 人气排名 -->
+{% if review.heat_ranks %}
+<div class="card">
+    <div class="card-title">
+        <span class="icon">🔥</span>
+        人气排名 TOP50
+    </div>
+    
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>排名</th>
+                    <th>代码</th>
+                    <th>名称</th>
+                    <th>问财</th>
+                    <th>雪球</th>
+                    <th>东财</th>
+                    <th>热度分</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for rank in review.heat_ranks %}
+                <tr {% if loop.index <= 3 %}style="background: linear-gradient(135deg, #fff9db 0%, #fff3bf 100%);"{% endif %}>
+                    <td style="font-weight: 700;">
+                        {% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% endif %}
+                        {{ loop.index }}
+                    </td>
+                    <td>{{ rank.code }}</td>
+                    <td><strong>{{ rank.name }}</strong></td>
+                    <td>{{ rank.wencai_rank if rank.wencai_rank > 0 else '-' }}</td>
+                    <td>{{ rank.xueqiu_rank if rank.xueqiu_rank > 0 else '-' }}</td>
+                    <td>{{ rank.eastmoney_rank if rank.eastmoney_rank > 0 else '-' }}</td>
+                    <td><strong>{{ "%.1f"|format(rank.composite_score) }}</strong></td>
+                    <td>
+                        <a href="{{ url_for('stock_detail_page', code=rank.code) }}" class="btn btn-sm btn-secondary">
+                            详情
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- 新闻资讯热度 -->
+{% if review.news_ranks %}
+<div class="card">
+    <div class="card-title">
+        <span class="icon">📰</span>
+        复合资讯热度 TOP30
+    </div>
+    
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>排名</th>
+                    <th>资讯标题</th>
+                    <th>来源数</th>
+                    <th>热度分</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for news in review.news_ranks[:30] %}
+                <tr>
+                    <td style="font-weight: 700;">{{ loop.index }}</td>
+                    <td style="text-align: left;">
+                        {% if news.representative_url %}
+                        <a href="{{ news.representative_url }}" target="_blank" style="color: #667eea; text-decoration: none;">
+                            {{ news.title }}
+                        </a>
+                        {% else %}
+                        {{ news.title }}
+                        {% endif %}
+                    </td>
+                    <td>{{ news.source_count }}</td>
+                    <td><strong>{{ "%.1f"|format(news.composite_score) }}</strong></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
