@@ -5,6 +5,7 @@
 用于获取个股的详细信息、点评和相关资讯
 """
 
+import html
 import json
 import re
 import time
@@ -74,6 +75,76 @@ class HexinStockAnalyzer:
             return 'sz'
         return 'sz'  # 默认深交所
     
+    def _clean_html_text(self, text: str) -> str:
+        """
+        清理HTML文本，去除HTML标签和实体
+        
+        Args:
+            text: 原始HTML文本
+            
+        Returns:
+            清理后的纯文本
+        """
+        if not text:
+            return ''
+        
+        # 解码HTML实体
+        text = html.unescape(text)
+        
+        # 去除HTML标签
+        text = re.sub(r'<[^>]+>', '', text)
+        
+        # 去除多余的空白字符
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        return text
+    
+    def _extract_stock_name_from_title(self, title_text: str) -> str:
+        """
+        从title标签内容中提取股票名称
+        
+        Args:
+            title_text: title标签的完整内容（已去除标签）
+            
+        Returns:
+            提取的股票名称
+        """
+        if not title_text:
+            return ''
+        
+        # 清理HTML
+        title_text = self._clean_html_text(title_text)
+        
+        # 常见的同花顺title格式：
+        # 1. "掌阅科技(603533)个股资金流向查询_个股行情_同花顺财经"
+        # 2. "贵州茅台(600519)个股点评_个股行情_同花顺财经"
+        # 3. "中国平安(601318)|股票行情|实时走势"
+        
+        # 先尝试提取 "股票名称(股票代码)" 格式
+        name_code_match = re.search(r'([^()（）\s]+)\s*[()（）]\s*(\d{6})\s*[)）]', title_text)
+        if name_code_match:
+            name = name_code_match.group(1).strip()
+            if len(name) >= 2:
+                return name
+        
+        # 尝试按分隔符分割
+        separators = ['|', '_', '-', '—', '个股', '股票', '行情']
+        for sep in separators:
+            if sep in title_text:
+                parts = title_text.split(sep)
+                if parts:
+                    # 取第一个部分，可能包含股票名称
+                    first_part = parts[0].strip()
+                    # 再次检查是否包含代码
+                    name_code_match = re.search(r'([^()（）\s]+)', first_part)
+                    if name_code_match:
+                        name = name_code_match.group(1).strip()
+                        if len(name) >= 2 and len(name) <= 10:  # 股票名称通常2-10个字
+                            return name
+        
+        # 如果都失败了，返回前10个字符（大多数股票名称在2-4个字）
+        return title_text[:10].strip()
+    
     @retry_with_backoff(initial_delay=1.0, max_delay=5.0, max_attempts=3)
     def get_stock_basic_info(self, code: str) -> Optional[Dict[str, Any]]:
         """
@@ -94,34 +165,95 @@ class HexinStockAnalyzer:
         try:
             resp = self.session.get(url, headers=self.headers, timeout=15)
             resp.raise_for_status()
-            html = resp.text
+            html_content = resp.text
             
-            # 从HTML中提取股票名称
-            name_match = re.search(r'<title>([^|]+)\|', html)
-            name = name_match.group(1).strip() if name_match else ''
+            # 从HTML中提取title标签内容（使用更严格的正则）
+            # 使用非贪婪匹配，只匹配到第一个</title>
+            title_match = re.search(r'<title[^>]*>(.*?)</title>', html_content, re.IGNORECASE | re.DOTALL)
+            name = ''
+            if title_match:
+                title_text = title_match.group(1)
+                name = self._extract_stock_name_from_title(title_text)
             
             # 提取最新价
-            price_match = re.search(r'最新价[：:]\s*([\d.]+)', html)
+            price_match = re.search(r'最新价[：:]\s*([\d.]+)', html_content)
             latest_price = float(price_match.group(1)) if price_match else 0.0
             
             # 提取涨跌幅
-            change_match = re.search(r'涨跌幅[：:]\s*([+-]?[\d.]+)%', html)
+            change_match = re.search(r'涨跌幅[：:]\s*([+-]?[\d.]+)%', html_content)
             change_pct = float(change_match.group(1)) if change_match else 0.0
             
             # 尝试从script标签提取更详细的数据
-            script_match = re.search(r'var\s+stockinfo\s*=\s*({[^}]+})', html)
-            if script_match:
-                try:
-                    stockinfo = json.loads(script_match.group(1))
-                    name = stockinfo.get('name', name)
-                    latest_price = float(stockinfo.get('price', latest_price))
-                    change_pct = float(stockinfo.get('changepercent', change_pct))
-                except (json.JSONDecodeError, ValueError):
-                    pass
+            # 使用更健壮的方式匹配JSON对象
+            # 匹配 var stockinfo = {...} 格式
+            script_patterns = [
+                r'var\s+stockinfo\s*=\s*({[^;]+});?',
+                r'stockinfo\s*=\s*({[^;]+});?',
+            ]
+            
+            for pattern in script_patterns:
+                script_match = re.search(pattern, html_content)
+                if script_match:
+                    json_str = script_match.group(1).strip()
+                    # 尝试修复可能不完整的JSON
+                    try:
+                        # 确保是有效的JSON
+                        stockinfo = json.loads(json_str)
+                        # 从JSON中获取名称
+                        json_name = stockinfo.get('name', '')
+                        if json_name and len(json_name) >= 2:
+                            name = self._clean_html_text(json_name)
+                        # 获取价格
+                        price = stockinfo.get('price', None)
+                        if price is not None:
+                            try:
+                                latest_price = float(price)
+                            except (ValueError, TypeError):
+                                pass
+                        # 获取涨跌幅
+                        change = stockinfo.get('changepercent', stockinfo.get('change_pct', None))
+                        if change is not None:
+                            try:
+                                change_pct = float(change)
+                            except (ValueError, TypeError):
+                                pass
+                        break
+                    except json.JSONDecodeError:
+                        # 尝试修复常见的JSON问题
+                        try:
+                            # 替换单引号为双引号
+                            fixed_json = json_str.replace("'", '"')
+                            stockinfo = json.loads(fixed_json)
+                            json_name = stockinfo.get('name', '')
+                            if json_name and len(json_name) >= 2:
+                                name = self._clean_html_text(json_name)
+                            break
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+            
+            # 如果名称还是空的，尝试直接从页面中提取更多信息
+            if not name or len(name) < 2:
+                # 尝试从meta标签提取
+                meta_match = re.search(r'<meta\s+name=["\']keywords["\'][^>]*content=["\']([^"\']+)["\']', 
+                                        html_content, re.IGNORECASE)
+                if meta_match:
+                    keywords = meta_match.group(1)
+                    # 关键词格式通常是："掌阅科技(603533)个股点评,掌阅科技(603533)个股查询,..."
+                    name_code_match = re.search(r'([^,，()（）\s]+)\s*[()（）]\s*' + code, keywords)
+                    if name_code_match:
+                        name = name_code_match.group(1).strip()
+            
+            # 最后验证名称
+            if name:
+                # 确保名称不包含HTML标签
+                name = self._clean_html_text(name)
+                # 限制名称长度（股票名称通常2-10个字）
+                if len(name) > 15:
+                    name = name[:15]
             
             result = {
                 'code': code,
-                'name': name,
+                'name': name or code,  # 如果没有名称，使用代码
                 'latest_price': latest_price,
                 'change_pct': change_pct,
             }

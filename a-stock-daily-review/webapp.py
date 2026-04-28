@@ -259,9 +259,34 @@ class WebApp:
             
             count = self.db.batch_add_watchlist(stocks)
             
+            # 对于每只股票，尝试获取并保存个股详情（包括名称）
+            success_with_detail = 0
+            for stock in stocks:
+                code = stock.get('code', '').strip()
+                if not code:
+                    continue
+                
+                try:
+                    detail = get_stock_detail(code)
+                    if detail:
+                        # 使用获取到的名称，或者用户提供的名称
+                        name = detail.get('name', '') or stock.get('name', '')
+                        self.db.save_stock_detail(
+                            code=code,
+                            name=name,
+                            latest_price=detail.get('latest_price', 0),
+                            change_pct=detail.get('change_pct', 0),
+                            comment=detail.get('comment'),
+                            news=detail.get('news')
+                        )
+                        success_with_detail += 1
+                except Exception as e:
+                    logger.warning(f"批量添加时获取股票 {code} 详情失败: {e}")
+            
             return jsonify({
                 'success': True,
                 'added_count': count,
+                'with_detail_count': success_with_detail,
                 'total_count': len(stocks),
                 'message': f'成功添加 {count} 只股票'
             })
