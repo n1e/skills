@@ -5,6 +5,13 @@
 A-Share Heat Rank Collector - Python Version
 
 采集问财、雪球、东方财富三大平台人气榜单，计算复合热度分数
+
+问财数据仅使用 OpenAPI 方式获取
+严格遵循 Iwencai (问财) OpenAPI 网关规范：
+- 每次请求携带 8 个 X-Claw-* Header
+- X-Claw-Trace-Id 为每次新生成的 64 字符十六进制唯一 ID
+- Authorization Bearer 仅从环境变量 IWENCAI_API_KEY 读取
+- 优先使用 POST
 """
 
 import argparse
@@ -13,8 +20,8 @@ import json
 import os
 import random
 import re
+import secrets
 import string
-import subprocess
 import sys
 import time
 import urllib.parse
@@ -22,6 +29,75 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 
 import requests
+
+SKILL_NAME = "stock-heat-rank-py"
+SKILL_VERSION = "1.0.0"
+DEFAULT_API_URL = "https://openapi.iwencai.com/v1/query2data"
+DEFAULT_PAGE = "1"
+DEFAULT_LIMIT = "10"
+DEFAULT_TIMEOUT = 30
+
+
+def generate_trace_id() -> str:
+    """生成 64 字符十六进制全局唯一追踪 ID。"""
+    return secrets.token_hex(32)
+
+
+def build_headers(api_key: str, trace_id: str, skill_name: str, skill_version: str, call_type: str = "normal") -> dict:
+    """构造符合问财网关规范的请求头。"""
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "X-Claw-Call-Type": call_type,
+        "X-Claw-Skill-Id": skill_name,
+        "X-Claw-Skill-Version": skill_version,
+        "X-Claw-Plugin-Id": "none",
+        "X-Claw-Plugin-Version": "none",
+        "X-Claw-Trace-Id": trace_id,
+    }
+
+
+def get_api_key() -> str:
+    """获取问财 API Key
+    
+    优先从环境变量读取
+    """
+    return os.environ.get('IWENCAI_API_KEY', '')
+
+
+def check_api_key_configured() -> bool:
+    """检查 API Key 是否已配置
+    
+    Returns:
+        True 如果已配置，False 否则
+    """
+    api_key = get_api_key()
+    if not api_key:
+        return False
+    if api_key == 'sk-proj-00':
+        return False
+    return True
+
+
+def get_api_key_reminder() -> str:
+    """获取 API Key 配置提醒信息"""
+    return """
+⚠️  问财 API Key 未配置！
+
+需要配置 IWENCAI_API_KEY 环境变量才能使用问财人气排名查询功能。
+
+配置方式：
+1. Windows (CMD):
+   set IWENCAI_API_KEY=your_api_key_here
+
+2. Windows (PowerShell):
+   $env:IWENCAI_API_KEY="your_api_key_here"
+
+3. Linux/Mac:
+   export IWENCAI_API_KEY=your_api_key_here
+
+获取 API Key：请访问同花顺问财开放平台申请
+"""
 
 
 @dataclass
@@ -51,209 +127,232 @@ def rand_string(n: int) -> str:
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=n))
 
 
-class WencaiClient:
-    """问财客户端"""
-
-    def __init__(self):
-        self.session = requests.Session()
-        self.other_uid = f"Ths_iwencai_Xuangu_{rand_string(32)}"
-        self.cookies = {
-            'other_uid': self.other_uid,
-            'ta_random_userid': rand_string(10),
-            'v': ''
-        }
-        self.js_path = self._find_js_path()
-
-    def _find_js_path(self) -> str:
-        """查找hexin_v.js路径"""
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        js_path = os.path.join(script_dir, 'lib', 'hexin_v.js')
-        if os.path.exists(js_path):
-            return js_path
-        js_path = os.path.join(script_dir, '..', 'stock-heat-rank', 'lib', 'hexin_v.js')
-        if os.path.exists(js_path):
-            return js_path
-        return 'lib/hexin_v.js'
-
-    def _generate_hexin_v(self) -> str:
-        """生成Hexin-V签名"""
-        timestamp = f"{time.time():.3f}"
-        try:
-            result = subprocess.run(
-                ['node', self.js_path, timestamp],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            return result.stdout.strip()
-        except Exception:
-            return "default_hexin_v_value"
-
-    def _visit_main(self):
-        """访问主页获取初始cookies"""
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        }
-        try:
-            resp = self.session.get('https://www.iwencai.com', headers=headers, timeout=15)
-            for cookie in resp.cookies:
-                self.cookies[cookie.name] = cookie.value
-        except Exception:
-            pass
-
-    def _visit_search(self):
-        """访问搜索页"""
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Referer': 'https://www.iwencai.com',
-        }
-        try:
-            resp = self.session.get('https://www.iwencai.com/unifiedwap/home/index', headers=headers, timeout=15)
-            for cookie in resp.cookies:
-                self.cookies[cookie.name] = cookie.value
-        except Exception:
-            pass
-
-    def _visit_hint(self):
-        """初始化会话"""
-        hexin_v = self._generate_hexin_v()
-        # 更新cookies中的v值为hexin_v
-        self.cookies['v'] = hexin_v
+class WencaiOpenAPI:
+    """
+    问财官方 OpenAPI 客户端
+    
+    使用 https://openapi.iwencai.com/v1/query2data 进行数据查询
+    这是当前唯一支持的方式
+    
+    严格遵循 Iwencai (问财) OpenAPI 网关规范：
+    - 每次请求携带 8 个 X-Claw-* Header
+    - X-Claw-Trace-Id 为每次新生成的 64 字符十六进制唯一 ID
+    """
+    
+    DEFAULT_API_URL = "https://openapi.iwencai.com/v1/query2data"
+    DEFAULT_PAGE = "1"
+    DEFAULT_LIMIT = "50"
+    DEFAULT_TIMEOUT = 30
+    
+    def __init__(self, skill_name: str = None, skill_version: str = None):
+        self._api_key = get_api_key()
+        self._skill_name = skill_name or SKILL_NAME
+        self._skill_version = skill_version or SKILL_VERSION
+        self._available = None
+    
+    def _check_available(self) -> bool:
+        """检查 OpenAPI 是否可用"""
+        if self._available is not None:
+            return self._available
         
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Origin': 'https://www.iwencai.com',
-            'Referer': 'https://www.iwencai.com/unifiedwap/home/index',
-            'Hexin-V': hexin_v,
-        }
-        data = {
-            'dataType': 'history',
-            'isAll': '1',
-            'num': '20',
-            'queryType': 'index',
-            'relatedId': '',
-        }
-        try:
-            resp = self.session.post(
-                'https://www.iwencai.com/unifiedwap/suggest/V1/index/query-hint-list',
-                headers=headers,
-                data=data,
-                cookies=self.cookies,
-                timeout=15
-            )
-        except Exception:
-            pass
-
-    def fetch(self, top: int = 50) -> List[StockRank]:
-        """获取问财人气排名"""
-        print("→ 访问问财主页...")
-        self._visit_main()
-        time.sleep(0.3)
-
-        print("→ 访问搜索页...")
-        self._visit_search()
-        time.sleep(0.3)
-
-        print("→ 初始化会话...")
-        self._visit_hint()
-        time.sleep(0.3)
-
-        print("→ 获取人气排名数据...")
-        return self._get_data(top)
-
-    def _get_data(self, top: int) -> List[StockRank]:
-        """获取排名数据"""
-        query = f"人气排名前{top}"
+        if not self._api_key:
+            print("  [警告] IWENCAI_API_KEY 未配置，OpenAPI 不可用")
+            self._available = False
+            return False
+        
+        if self._api_key == 'sk-proj-00':
+            print("  [警告] IWENCAI_API_KEY 使用默认占位值，请配置真实的 API Key")
+            self._available = False
+            return False
+        
+        self._available = True
+        return self._available
+    
+    def query(self, query: str, page: str = None, limit: str = None, call_type: str = "normal") -> Optional[Dict]:
+        """
+        使用 OpenAPI 执行查询
+        
+        Args:
+            query: 查询字符串
+            page: 分页参数
+            limit: 每页条数
+            call_type: 调用类型，normal 或 retry
+            
+        Returns:
+            包含 datas、code_count、chunks_info 等字段的字典，失败返回 None
+        """
+        if not self._check_available():
+            return None
+        
+        page = page or self.DEFAULT_PAGE
+        limit = limit or self.DEFAULT_LIMIT
+        trace_id = generate_trace_id()
+        
         payload = {
-            "source": "Ths_iwencai_Xuangu",
-            "version": "2.0",
-            "query_area": "",
-            "block_list": "",
-            "add_info": '{"urp":{"scene":1,"company":1,"business":1},"contentType":"json","searchInfo":true}',
-            "question": query,
-            "perpage": top,
-            "page": 1,
-            "secondary_intent": "",
-            "log_info": '{"input_type":"typewrite"}',
-            "rsh": self.other_uid,
+            "query": query,
+            "page": page,
+            "limit": limit,
+            "is_cache": "1",
+            "expand_index": "true",
         }
-
-        hexin_v = self._generate_hexin_v()
-        # 更新cookies中的v值为hexin_v
-        self.cookies['v'] = hexin_v
-
-        headers = {
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Origin': 'https://www.iwencai.com',
-            'Referer': f'https://www.iwencai.com/unifiedwap/result?w={urllib.parse.quote(query)}',
-            'Hexin-V': hexin_v,
-        }
-
+        
+        headers = build_headers(
+            api_key=self._api_key,
+            trace_id=trace_id,
+            skill_name=self._skill_name,
+            skill_version=self._skill_version,
+            call_type=call_type
+        )
+        
         try:
-            resp = self.session.post(
-                'https://www.iwencai.com/customized/chart/get-robot-data',
+            print(f"  使用问财 OpenAPI 查询: {query} (trace_id={trace_id})")
+            
+            resp = requests.post(
+                self.DEFAULT_API_URL,
                 headers=headers,
                 json=payload,
-                cookies=self.cookies,
-                timeout=30
+                timeout=self.DEFAULT_TIMEOUT
             )
-            return self._parse_response(resp.json(), top)
+            
+            print(f"  API 响应状态码: {resp.status_code}")
+            
+            response_body = resp.text
+            
+            if not response_body.strip():
+                print("  [警告] API 返回空响应")
+                return None
+            
+            try:
+                result = json.loads(response_body)
+                
+                if isinstance(result, dict):
+                    status_code = result.get("status_code", 0)
+                    if status_code != 0:
+                        status_msg = result.get("status_msg", "未知错误")
+                        print(f"  [警告] OpenAPI 返回错误: status_code={status_code}, msg={status_msg}")
+                        return None
+                    
+                    result["trace_id"] = trace_id
+                    return {
+                        "datas": result.get("datas", []),
+                        "code_count": result.get("code_count", 0),
+                        "chunks_info": result.get("chunks_info", {}),
+                        "trace_id": trace_id,
+                        "status_code": 0
+                    }
+                
+                elif isinstance(result, list):
+                    return {
+                        "data": result,
+                        "trace_id": trace_id,
+                        "datas": result,
+                        "code_count": len(result),
+                        "status_code": 0
+                    }
+                
+                return None
+                
+            except json.JSONDecodeError as e:
+                print(f"  [警告] API 响应不是有效 JSON: {e}")
+                if len(response_body) < 500:
+                    print(f"  响应内容: {response_body}")
+                else:
+                    print(f"  响应内容 (前500字符): {response_body[:500]}")
+                return None
+            
+        except requests.exceptions.RequestException as e:
+            print(f"  [警告] OpenAPI 请求失败: {e}")
+            return None
         except Exception as e:
-            raise Exception(f"请求失败: {e}")
+            print(f"  [警告] OpenAPI 查询异常: {e}")
+            return None
+    
+    def is_available(self) -> bool:
+        """检查 OpenAPI 是否完全可用"""
+        return self._check_available()
 
-    def _parse_response(self, data: dict, top: int) -> List[StockRank]:
-        """解析响应数据"""
-        # 检查响应状态 - 可能是errno或status_code
-        status = data.get('errno', data.get('status_code', -1))
-        if status != 0:
-            raise Exception(f"问财返回错误码: {status}")
 
-        ranks = []
+class WencaiFetcher:
+    """
+    问财人气排名采集器
+    
+    仅使用 OpenAPI 方式进行数据查询
+    旧 URL 方式已移除
+    """
+    
+    def __init__(self):
+        self._openapi = WencaiOpenAPI()
+    
+    def fetch(self, top: int = 50) -> List[StockRank]:
+        """获取问财人气排名
+        
+        Args:
+            top: 获取前N名
+            
+        Returns:
+            股票排名列表
+        """
+        print("【问财】正在采集...")
+        
+        if not self._openapi.is_available():
+            print("  采集失败: OpenAPI 不可用")
+            return []
+        
         try:
-            # 尝试解析数据
-            answer = data.get('data', {}).get('answer', [])
-            if not answer:
-                raise Exception("answer为空")
+            result = self._openapi.query(f"人气排名前{top}", limit=str(top))
             
-            txt_list = answer[0].get('txt', [])
-            if not txt_list:
-                raise Exception("txt为空")
+            if not result:
+                print("  采集失败: 查询无结果")
+                return []
             
-            content = txt_list[0].get('content', {})
-            components = content.get('components', [])
-            if not components:
-                raise Exception("components为空")
+            ranks = self._parse_result(result, top)
             
-            datas = components[0].get('data', {}).get('datas', [])
-            if not datas:
-                raise Exception("datas为空")
+            if ranks:
+                print(f"  成功获取 {len(ranks)} 只股票")
+            else:
+                print("  采集失败: 未解析到数据")
             
-            for i, item in enumerate(datas[:top]):
-                code = item.get('股票代码', item.get('code', item.get('stockCode', '')))
-                name = item.get('股票简称', item.get('name', item.get('stockName', '')))
-                if code and name:
-                    ranks.append(StockRank(
-                        code=str(code),
-                        name=str(name),
-                        rank=i + 1,
-                        heat_score=top - i,
-                        source='wencai'
-                    ))
-        except (KeyError, IndexError) as e:
-            raise Exception(f"解析失败: {e}")
-
-        if not ranks:
-            raise Exception("未解析到数据，可能需要更新反爬策略")
+            return ranks
+            
+        except Exception as e:
+            print(f"  采集失败: {e}")
+            return []
+    
+    def _parse_result(self, result: Dict, top: int) -> List[StockRank]:
+        """解析 OpenAPI 返回结果
+        
+        OpenAPI 返回格式：
+        {
+            "datas": [...],
+            "code_count": N,
+            "chunks_info": {},
+            "trace_id": "...",
+            "status_code": 0
+        }
+        """
+        ranks = []
+        
+        datas = result.get('datas', [])
+        if not datas:
+            return ranks
+        
+        for i, item in enumerate(datas[:top]):
+            code = item.get('股票代码', item.get('code', item.get('stockCode', '')))
+            name = item.get('股票简称', item.get('name', item.get('stockName', '')))
+            
+            if code and name:
+                code_str = str(code)
+                if '.' in code_str:
+                    code_str = code_str.split('.')[0]
+                
+                ranks.append(StockRank(
+                    code=code_str,
+                    name=str(name),
+                    rank=i + 1,
+                    heat_score=top - i,
+                    source='wencai'
+                ))
+        
         return ranks
 
 
@@ -357,7 +456,7 @@ class EastmoneyFetcher:
             sc = item.get('sc', '')
             if len(sc) < 8:
                 continue
-            code = sc[2:]  # 去掉前缀
+            code = sc[2:]
 
             ranks.append(StockRank(
                 code=code,
@@ -395,7 +494,6 @@ def calculate_composite(wencai: List[StockRank], xueqiu: List[StockRank], eastmo
     """计算复合热度"""
     stock_map: Dict[str, CompositeRank] = {}
 
-    # 处理问财数据
     for r in wencai:
         code = normalize_code(r.code)
         if not code:
@@ -405,7 +503,6 @@ def calculate_composite(wencai: List[StockRank], xueqiu: List[StockRank], eastmo
         stock_map[code].wencai_rank = r.rank
         stock_map[code].appear_count += 1
 
-    # 处理雪球数据
     for r in xueqiu:
         code = normalize_code(r.code)
         if not code:
@@ -415,7 +512,6 @@ def calculate_composite(wencai: List[StockRank], xueqiu: List[StockRank], eastmo
         stock_map[code].xueqiu_rank = r.rank
         stock_map[code].appear_count += 1
 
-    # 处理东财数据
     for r in eastmoney:
         code = normalize_code(r.code)
         if not code:
@@ -427,7 +523,6 @@ def calculate_composite(wencai: List[StockRank], xueqiu: List[StockRank], eastmo
         stock_map[code].eastmoney_rank = r.rank
         stock_map[code].appear_count += 1
 
-    # 计算复合得分
     for stock in stock_map.values():
         score = 0.0
         if stock.wencai_rank > 0:
@@ -444,7 +539,6 @@ def calculate_composite(wencai: List[StockRank], xueqiu: List[StockRank], eastmo
 
         stock.composite_score = score / 3.5
 
-    # 排序
     return sorted(stock_map.values(), key=lambda x: x.composite_score, reverse=True)
 
 
@@ -492,15 +586,25 @@ def main():
     print("=== 股票热度排名采集器 ===")
     print(f"采集时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
+    # 检查问财 API Key 是否配置
+    if not check_api_key_configured():
+        print("=" * 60)
+        print("⚠️  警告：问财 API Key 未配置")
+        print("=" * 60)
+        print(get_api_key_reminder())
+        print("问财人气排名功能将无法使用")
+        print("将只使用雪球和东方财富的数据进行计算")
+        print("=" * 60 + "\n")
+
     # 采集问财数据
-    print("【问财】正在采集...")
     wencai_ranks = []
+    wencai_fetcher = WencaiFetcher()
     try:
-        client = WencaiClient()
-        wencai_ranks = client.fetch(50)
-        print(f"  成功获取 {len(wencai_ranks)} 只股票")
+        wencai_ranks = wencai_fetcher.fetch(50)
+        if wencai_ranks:
+            print(f"【问财】成功获取 {len(wencai_ranks)} 只股票")
     except Exception as e:
-        print(f"  采集失败: {e}")
+        print(f"【问财】采集失败: {e}")
 
     # 采集雪球数据
     print("\n【雪球】正在采集...")

@@ -23,7 +23,7 @@ from logger import setup_logger, logger
 from models.market import MarketData
 from models.stock import SurgeStock, CompositeHeatRank
 from models.review import DailyReview
-from fetcher.wencai import WencaiFetcher
+from fetcher.wencai import WencaiFetcher, check_api_key_configured, get_api_key_reminder
 from fetcher.xueqiu import XueqiuFetcher
 from fetcher.eastmoney import EastmoneyFetcher
 from fetcher.legu import LeguFetcher
@@ -632,6 +632,16 @@ def main():
     logger.info("A股每日复盘报告生成器启动")
     logger.info(f"运行模式: {args.mode}")
     logger.info("=" * 60)
+    
+    # 检查问财 API Key 是否配置
+    if not check_api_key_configured():
+        logger.warning(get_api_key_reminder())
+        print("\n" + "=" * 60)
+        print("⚠️  警告：问财 API Key 未配置")
+        print("=" * 60)
+        print("问财数据查询功能将无法使用（成交额历史、涨停股票、人气排名）")
+        print("请配置 IWENCAI_API_KEY 环境变量后重新运行")
+        print("=" * 60 + "\n")
     
     # 处理服务模式的额外参数
     if args.mode == 'service':
