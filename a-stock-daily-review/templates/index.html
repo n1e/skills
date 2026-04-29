@@ -360,7 +360,11 @@
                 clearInterval(statusCheckInterval);
                 statusCheckInterval = null;
             }
-            showToast('复盘任务完成！', 'success');
+            showToast('复盘任务完成！页面将刷新以显示最新数据...', 'success');
+            // 延迟刷新页面，让用户看到提示
+            setTimeout(function() {
+                window.location.reload();
+            }, 1500);
         } else if (taskStatus.status === 'failed') {
             statusHtml = `
                 <span class="tag" style="background: #f8d7da; color: #721c24;">

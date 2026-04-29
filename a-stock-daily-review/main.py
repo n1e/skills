@@ -454,18 +454,19 @@ def execute_review_task(date: str = None, output_format: str = 'html') -> DailyR
     # 生成报告文件
     generate_report(review, output_format)
     
-    # 保存到数据库（如果服务模式模块可用）
-    if _service_modules_available:
-        try:
-            db = get_database()
-            if db.save_review(review):
-                logger.info(f"复盘数据已保存到数据库: {date}")
-            else:
-                logger.warning(f"复盘数据保存到数据库失败: {date}")
-        except Exception as e:
-            logger.error(f"保存到数据库失败: {e}")
-    else:
-        logger.warning("服务模式模块不可用，跳过数据库保存")
+    # 保存到数据库（尝试导入并保存）
+    try:
+        # 延迟导入，避免循环依赖问题
+        from database import get_database
+        db = get_database()
+        if db.save_review(review):
+            logger.info(f"复盘数据已保存到数据库: {date}")
+        else:
+            logger.warning(f"复盘数据保存到数据库失败: {date}")
+    except ImportError:
+        logger.warning("数据库模块不可用，跳过数据库保存")
+    except Exception as e:
+        logger.error(f"保存到数据库失败: {e}", exc_info=True)
     
     # 推送报告
     _push_report(review, output_format)
