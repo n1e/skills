@@ -836,6 +836,9 @@ class DatabaseManager:
     def import_review_from_json(self, json_path: str) -> bool:
         """
         从JSON文件导入复盘数据到数据库
+        支持两种格式：
+        1. 正式报告文件 (review_YYYY-MM-DD.json) - 有完整的 date 字段和所有数据
+        2. 缓存文件 (.cache_YYYY-MM-DD.json) - 日期从文件名提取，只有部分统计数据
         
         Args:
             json_path: JSON文件路径
@@ -844,15 +847,23 @@ class DatabaseManager:
             是否导入成功
         """
         try:
+            filename = os.path.basename(json_path)
+            
             with open(json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             review = DailyReview()
+            
             review.date = data.get('date', '')
             
             if not review.date:
-                logger.error(f"JSON文件缺少日期字段: {json_path}")
-                return False
+                date_from_filename = self._extract_date_from_filename(filename)
+                if date_from_filename:
+                    review.date = date_from_filename
+                    logger.info(f"从文件名提取日期: {review.date} (文件: {filename})")
+                else:
+                    logger.error(f"JSON文件缺少日期字段且无法从文件名提取: {json_path}")
+                    return False
             
             market = data.get('market', {})
             review.market.up_count = market.get('up_count', 0)
@@ -868,37 +879,51 @@ class DatabaseManager:
             review.market._greed_index = market.get('greed_index', -1)
             review.market._congestion = market.get('congestion', -1)
             
+            review.market.up_0_3 = market.get('up_0_3', 0)
+            review.market.up_3_5 = market.get('up_3_5', 0)
+            review.market.up_5_7 = market.get('up_5_7', 0)
+            review.market.up_7_10 = market.get('up_7_10', 0)
+            review.market.up_10_20 = market.get('up_10_20', 0)
+            review.market.down_0_3 = market.get('down_0_3', 0)
+            review.market.down_3_5 = market.get('down_3_5', 0)
+            review.market.down_5_7 = market.get('down_5_7', 0)
+            review.market.down_7_10 = market.get('down_7_10', 0)
+            review.market.down_10_20 = market.get('down_10_20', 0)
+            
             volume_history = data.get('volume_history', [])
-            review.volume_history = [
-                VolumeData(date=v['date'], volume=v['volume'])
-                for v in volume_history
-            ]
+            if volume_history:
+                review.volume_history = [
+                    VolumeData(date=v['date'], volume=v['volume'])
+                    for v in volume_history
+                ]
             
             surge_stocks = data.get('surge_stocks', [])
-            review.surge_stocks = [
-                SurgeStock(
-                    code=s['code'], name=s['name'],
-                    price=s.get('price', 0), change_pct=s.get('change_pct', 0),
-                    reason=s.get('reason', ''), reason_category=s.get('reason_category', '')
-                )
-                for s in surge_stocks
-            ]
+            if surge_stocks:
+                review.surge_stocks = [
+                    SurgeStock(
+                        code=s['code'], name=s['name'],
+                        price=s.get('price', 0), change_pct=s.get('change_pct', 0),
+                        reason=s.get('reason', ''), reason_category=s.get('reason_category', '')
+                    )
+                    for s in surge_stocks
+                ]
             
             heat_ranks = data.get('heat_ranks', [])
-            review.heat_ranks = [
-                CompositeHeatRank(
-                    code=h['code'], name=h['name'],
-                    wencai_rank=h.get('wencai_rank', 0), xueqiu_rank=h.get('xueqiu_rank', 0),
-                    eastmoney_rank=h.get('eastmoney_rank', 0), thsi_rank=h.get('thsi_rank', 0),
-                    composite_score=h.get('composite_score', 0), appear_count=h.get('appear_count', 0)
-                )
-                for h in heat_ranks
-            ]
+            if heat_ranks:
+                review.heat_ranks = [
+                    CompositeHeatRank(
+                        code=h['code'], name=h['name'],
+                        wencai_rank=h.get('wencai_rank', 0), xueqiu_rank=h.get('xueqiu_rank', 0),
+                        eastmoney_rank=h.get('eastmoney_rank', 0), thsi_rank=h.get('thsi_rank', 0),
+                        composite_score=h.get('composite_score', 0), appear_count=h.get('appear_count', 0)
+                    )
+                    for h in heat_ranks
+                ]
             
             return self.save_review(review)
             
         except Exception as e:
-            logger.error(f"从JSON文件导入数据失败: {e}")
+            logger.error(f"从JSON文件导入数据失败: {e}", exc_info=True)
             return False
 
 
