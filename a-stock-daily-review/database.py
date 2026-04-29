@@ -614,6 +614,292 @@ class DatabaseManager:
             return None
         finally:
             conn.close()
+    
+    # ==================== 多日比较数据接口 ====================
+    
+    def get_market_data_by_dates(self, dates: List[str]) -> List[Dict[str, Any]]:
+        """
+        获取多个日期的市场数据，用于多日比较
+        
+        Args:
+            dates: 日期列表
+            
+        Returns:
+            市场数据列表
+        """
+        conn = self._get_connection()
+        try:
+            placeholders = ','.join(['?' for _ in dates])
+            results = conn.execute(f"""
+                SELECT date, market_data_json
+                FROM daily_reviews
+                WHERE date IN ({placeholders})
+                ORDER BY date ASC
+            """, dates).fetchall()
+            
+            market_data_list = []
+            for result in results:
+                date = result[0]
+                market_json = result[1]
+                
+                if market_json:
+                    market_data = json.loads(market_json)
+                    market_data['date'] = date
+                    market_data_list.append(market_data)
+            
+            return market_data_list
+        except Exception as e:
+            logger.error(f"获取多日市场数据失败: {e}")
+            return []
+        finally:
+            conn.close()
+    
+    def get_market_data_range(self, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+        """
+        获取指定日期范围内的市场数据
+        
+        Args:
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            市场数据列表
+        """
+        conn = self._get_connection()
+        try:
+            results = conn.execute("""
+                SELECT date, market_data_json
+                FROM daily_reviews
+                WHERE date >= ? AND date <= ?
+                ORDER BY date ASC
+            """, [start_date, end_date]).fetchall()
+            
+            market_data_list = []
+            for result in results:
+                date = result[0]
+                market_json = result[1]
+                
+                if market_json:
+                    market_data = json.loads(market_json)
+                    market_data['date'] = date
+                    market_data_list.append(market_data)
+            
+            return market_data_list
+        except Exception as e:
+            logger.error(f"获取日期范围市场数据失败: {e}")
+            return []
+        finally:
+            conn.close()
+    
+    def get_surge_stocks_by_dates(self, dates: List[str]) -> List[Dict[str, Any]]:
+        """
+        获取多个日期的涨停股票数据
+        
+        Args:
+            dates: 日期列表
+            
+        Returns:
+            涨停股票列表，包含日期信息
+        """
+        conn = self._get_connection()
+        try:
+            placeholders = ','.join(['?' for _ in dates])
+            results = conn.execute(f"""
+                SELECT date, code, name, price, change_pct, reason, reason_category
+                FROM surge_stocks_daily
+                WHERE date IN ({placeholders})
+                ORDER BY date ASC, change_pct DESC
+            """, dates).fetchall()
+            
+            return [
+                {
+                    'date': r[0], 'code': r[1], 'name': r[2],
+                    'price': r[3], 'change_pct': r[4],
+                    'reason': r[5], 'reason_category': r[6]
+                }
+                for r in results
+            ]
+        except Exception as e:
+            logger.error(f"获取多日涨停数据失败: {e}")
+            return []
+        finally:
+            conn.close()
+    
+    def get_heat_ranks_by_dates(self, dates: List[str]) -> List[Dict[str, Any]]:
+        """
+        获取多个日期的人气排名数据
+        
+        Args:
+            dates: 日期列表
+            
+        Returns:
+            人气排名列表，包含日期信息
+        """
+        conn = self._get_connection()
+        try:
+            placeholders = ','.join(['?' for _ in dates])
+            results = conn.execute(f"""
+                SELECT date, code, name, composite_score, appear_count,
+                       wencai_rank, xueqiu_rank, eastmoney_rank, thsi_rank
+                FROM heat_ranks_daily
+                WHERE date IN ({placeholders})
+                ORDER BY date ASC, composite_score DESC
+            """, dates).fetchall()
+            
+            return [
+                {
+                    'date': r[0], 'code': r[1], 'name': r[2],
+                    'composite_score': r[3], 'appear_count': r[4],
+                    'wencai_rank': r[5], 'xueqiu_rank': r[6],
+                    'eastmoney_rank': r[7], 'thsi_rank': r[8]
+                }
+                for r in results
+            ]
+        except Exception as e:
+            logger.error(f"获取多日人气排名失败: {e}")
+            return []
+        finally:
+            conn.close()
+    
+    # ==================== 数据导入相关接口 ====================
+    
+    def get_unimported_files(self, output_dir: str = None) -> List[Dict[str, Any]]:
+        """
+        获取output目录下未入库的历史文件
+        
+        Args:
+            output_dir: 输出目录路径
+            
+        Returns:
+            未入库文件列表
+        """
+        if output_dir is None:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            output_dir = os.path.join(script_dir, 'output')
+        
+        if not os.path.exists(output_dir):
+            return []
+        
+        imported_dates = set(self.get_available_dates())
+        unimported_files = []
+        
+        for filename in os.listdir(output_dir):
+            file_path = os.path.join(output_dir, filename)
+            
+            if not os.path.isfile(file_path):
+                continue
+            
+            date_from_file = self._extract_date_from_filename(filename)
+            if date_from_file:
+                if date_from_file not in imported_dates:
+                    stat = os.stat(file_path)
+                    unimported_files.append({
+                        'filename': filename,
+                        'date': date_from_file,
+                        'size': stat.st_size,
+                        'modified_at': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                        'file_path': file_path
+                    })
+        
+        unimported_files.sort(key=lambda x: x['date'], reverse=True)
+        return unimported_files
+    
+    def _extract_date_from_filename(self, filename: str) -> Optional[str]:
+        """
+        从文件名中提取日期
+        
+        支持的格式：
+        - review_YYYY-MM-DD.json
+        - review_YYYY-MM-DD.html
+        - .cache_YYYY-MM-DD.json
+        
+        Args:
+            filename: 文件名
+            
+        Returns:
+            日期字符串 YYYY-MM-DD 或 None
+        """
+        import re
+        
+        patterns = [
+            r'review_(\d{4}-\d{2}-\d{2})\.',
+            r'\.cache_(\d{4}-\d{2}-\d{2})\.',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, filename)
+            if match:
+                return match.group(1)
+        
+        return None
+    
+    def import_review_from_json(self, json_path: str) -> bool:
+        """
+        从JSON文件导入复盘数据到数据库
+        
+        Args:
+            json_path: JSON文件路径
+            
+        Returns:
+            是否导入成功
+        """
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            review = DailyReview()
+            review.date = data.get('date', '')
+            
+            if not review.date:
+                logger.error(f"JSON文件缺少日期字段: {json_path}")
+                return False
+            
+            market = data.get('market', {})
+            review.market.up_count = market.get('up_count', 0)
+            review.market.down_count = market.get('down_count', 0)
+            review.market.flat_count = market.get('flat_count', 0)
+            review.market.total_count = market.get('total_count', 0)
+            review.market.limit_up_count = market.get('limit_up_count', 0)
+            review.market.limit_down_count = market.get('limit_down_count', 0)
+            review.market.suspension_count = market.get('suspension_count', 0)
+            review.market.real_limit_up_count = market.get('real_limit_up_count', 0)
+            review.market.real_limit_down_count = market.get('real_limit_down_count', 0)
+            review.market._fear_index = market.get('fear_index', -1)
+            review.market._greed_index = market.get('greed_index', -1)
+            review.market._congestion = market.get('congestion', -1)
+            
+            volume_history = data.get('volume_history', [])
+            review.volume_history = [
+                VolumeData(date=v['date'], volume=v['volume'])
+                for v in volume_history
+            ]
+            
+            surge_stocks = data.get('surge_stocks', [])
+            review.surge_stocks = [
+                SurgeStock(
+                    code=s['code'], name=s['name'],
+                    price=s.get('price', 0), change_pct=s.get('change_pct', 0),
+                    reason=s.get('reason', ''), reason_category=s.get('reason_category', '')
+                )
+                for s in surge_stocks
+            ]
+            
+            heat_ranks = data.get('heat_ranks', [])
+            review.heat_ranks = [
+                CompositeHeatRank(
+                    code=h['code'], name=h['name'],
+                    wencai_rank=h.get('wencai_rank', 0), xueqiu_rank=h.get('xueqiu_rank', 0),
+                    eastmoney_rank=h.get('eastmoney_rank', 0), thsi_rank=h.get('thsi_rank', 0),
+                    composite_score=h.get('composite_score', 0), appear_count=h.get('appear_count', 0)
+                )
+                for h in heat_ranks
+            ]
+            
+            return self.save_review(review)
+            
+        except Exception as e:
+            logger.error(f"从JSON文件导入数据失败: {e}")
+            return False
 
 
 # 全局数据库实例

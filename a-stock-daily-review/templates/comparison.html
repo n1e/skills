@@ -1,0 +1,750 @@
+{% extends "base.html" %}
+
+{% block title %}多日数据比较{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">📊 多日数据比较</h1>
+    <p class="page-subtitle">选择日期区间和数据项，进行多日数据对比分析</p>
+</div>
+
+<div class="card" style="padding: 25px; margin-bottom: 30px;">
+    <div class="card-title" style="margin-bottom: 20px;">
+        <span class="icon">📅</span>
+        选择日期范围
+    </div>
+    
+    <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end;">
+        <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 200px;">
+            <label class="form-label">开始日期</label>
+            <select id="startDate" class="form-input">
+                <option value="">请选择</option>
+                {% for date in dates %}
+                <option value="{{ date }}">{{ date }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 200px;">
+            <label class="form-label">结束日期</label>
+            <select id="endDate" class="form-input">
+                <option value="">请选择</option>
+                {% for date in dates %}
+                <option value="{{ date }}">{{ date }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div style="display: flex; gap: 10px;">
+            <button id="loadDataBtn" class="btn btn-primary">
+                🔍 加载数据
+            </button>
+            <button id="clearSelectionBtn" class="btn btn-secondary">
+                🔄 重置
+            </button>
+        </div>
+    </div>
+    
+    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e9ecef;">
+        <div style="font-weight: 600; margin-bottom: 15px;">选择数据项:</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 15px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="dataUpDown" checked class="data-item" value="updown">
+                <span>涨跌数量</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="dataLimit" checked class="data-item" value="limit">
+                <span>涨跌停数据</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="dataSentiment" checked class="data-item" value="sentiment">
+                <span>市场情绪</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="dataDistribution" class="data-item" value="distribution">
+                <span>涨跌分布</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="dataSurge" class="data-item" value="surge">
+                <span>涨停股票</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="dataHeat" class="data-item" value="heat">
+                <span>人气排名</span>
+            </label>
+        </div>
+    </div>
+</div>
+
+<div id="loadingIndicator" style="display: none; text-align: center; padding: 40px;">
+    <div class="loading" style="width: 40px; height: 40px; margin: 0 auto 15px;"></div>
+    <p>正在加载数据...</p>
+</div>
+
+<div id="chartsContainer" style="display: none;">
+    <div id="upDownSection" class="card">
+        <div class="card-title">
+            <span class="icon">📈</span>
+            涨跌数量趋势
+        </div>
+        <div class="chart-container" style="height: 350px;">
+            <canvas id="upDownChart"></canvas>
+        </div>
+    </div>
+    
+    <div id="limitSection" class="card">
+        <div class="card-title">
+            <span class="icon">🚀</span>
+            涨跌停数据趋势
+        </div>
+        <div class="chart-container" style="height: 350px;">
+            <canvas id="limitChart"></canvas>
+        </div>
+    </div>
+    
+    <div id="sentimentSection" class="card">
+        <div class="card-title">
+            <span class="icon">🎭</span>
+            市场情绪趋势
+        </div>
+        <div class="chart-container" style="height: 350px;">
+            <canvas id="sentimentChart"></canvas>
+        </div>
+    </div>
+    
+    <div id="distributionSection" class="card" style="display: none;">
+        <div class="card-title">
+            <span class="icon">📊</span>
+            涨跌分布
+        </div>
+        <div id="distributionCharts" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;">
+            <div class="chart-container" style="height: 300px;">
+                <canvas id="upDistributionChart"></canvas>
+            </div>
+            <div class="chart-container" style="height: 300px;">
+                <canvas id="downDistributionChart"></canvas>
+            </div>
+        </div>
+    </div>
+    
+    <div id="surgeSection" class="card" style="display: none;">
+        <div class="card-title">
+            <span class="icon">🚀</span>
+            涨停股票统计
+        </div>
+        <div class="chart-container" style="height: 300px; margin-bottom: 20px;">
+            <canvas id="surgeCountChart"></canvas>
+        </div>
+        <div id="surgeDetails"></div>
+    </div>
+    
+    <div id="heatSection" class="card" style="display: none;">
+        <div class="card-title">
+            <span class="icon">🔥</span>
+            人气排名分析
+        </div>
+        <div id="frequentStocks" style="margin-bottom: 20px;"></div>
+        <div id="heatDetails"></div>
+    </div>
+</div>
+
+<div id="noDataSection" class="card" style="display: none;">
+    <div class="empty-state">
+        <div class="icon">📭</div>
+        <p>暂无数据</p>
+        <p style="color: #999; font-size: 0.9em;">请选择日期范围后加载数据</p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">
+        <span class="icon">📋</span>
+        数据明细报表
+    </div>
+    <div class="table-wrapper">
+        <table id="dataTable">
+            <thead>
+                <tr>
+                    <th>日期</th>
+                    <th>上涨</th>
+                    <th>下跌</th>
+                    <th>平盘</th>
+                    <th>涨停</th>
+                    <th>跌停</th>
+                    <th>真实涨停</th>
+                    <th>拥挤度</th>
+                    <th>恐慌指数</th>
+                    <th>贪婪指数</th>
+                </tr>
+            </thead>
+            <tbody id="dataTableBody">
+                <tr>
+                    <td colspan="10" style="text-align: center; color: #999; padding: 30px;">
+                        请先加载数据
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentData = null;
+let charts = {};
+
+function formatNumber(num) {
+    if (num === null || num === undefined) return '-';
+    return num.toLocaleString();
+}
+
+function formatPercent(num, decimals = 1) {
+    if (num === null || num === undefined) return '-';
+    return num.toFixed(decimals) + '%';
+}
+
+function getSelectedDates() {
+    const startDate = document.getElementById('startDate').value;
+    const endDate = document.getElementById('endDate').value;
+    
+    if (!startDate || !endDate) {
+        return null;
+    }
+    
+    const allDates = Array.from(document.getElementById('startDate').options)
+        .filter(opt => opt.value)
+        .map(opt => opt.value);
+    
+    const startIdx = allDates.indexOf(startDate);
+    const endIdx = allDates.indexOf(endDate);
+    
+    if (startIdx === -1 || endIdx === -1) return null;
+    
+    const minIdx = Math.min(startIdx, endIdx);
+    const maxIdx = Math.max(startIdx, endIdx);
+    
+    return allDates.slice(minIdx, maxIdx + 1);
+}
+
+function getSelectedDataItems() {
+    const items = [];
+    document.querySelectorAll('.data-item:checked').forEach(cb => {
+        items.push(cb.value);
+    });
+    return items;
+}
+
+async function loadMarketData() {
+    const dates = getSelectedDates();
+    if (!dates || dates.length === 0) {
+        showToast('请选择有效的日期范围', 'error');
+        return;
+    }
+    
+    document.getElementById('loadingIndicator').style.display = 'block';
+    document.getElementById('chartsContainer').style.display = 'none';
+    document.getElementById('noDataSection').style.display = 'none';
+    
+    try {
+        const response = await fetch(`/api/comparison/market?dates=${dates.join(',')}`);
+        const result = await response.json();
+        
+        if (result.success && result.market_data && result.market_data.length > 0) {
+            currentData = result.market_data;
+            renderCharts();
+            renderDataTable();
+            document.getElementById('chartsContainer').style.display = 'block';
+        } else {
+            document.getElementById('noDataSection').style.display = 'block';
+            showToast('未找到数据', 'warning');
+        }
+    } catch (error) {
+        showToast('加载数据失败: ' + error.message, 'error');
+    } finally {
+        document.getElementById('loadingIndicator').style.display = 'none';
+    }
+}
+
+function createChartConfig(labels, datasets, title) {
+    return {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'top',
+                },
+                title: {
+                    display: true,
+                    text: title
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            }
+        }
+    };
+}
+
+function renderCharts() {
+    if (!currentData || currentData.length === 0) return;
+    
+    const labels = currentData.map(d => d.date);
+    const items = getSelectedDataItems();
+    
+    document.getElementById('upDownSection').style.display = items.includes('updown') ? 'block' : 'none';
+    document.getElementById('limitSection').style.display = items.includes('limit') ? 'block' : 'none';
+    document.getElementById('sentimentSection').style.display = items.includes('sentiment') ? 'block' : 'none';
+    document.getElementById('distributionSection').style.display = items.includes('distribution') ? 'block' : 'none';
+    document.getElementById('surgeSection').style.display = items.includes('surge') ? 'block' : 'none';
+    document.getElementById('heatSection').style.display = items.includes('heat') ? 'block' : 'none';
+    
+    Object.values(charts).forEach(chart => {
+        if (chart) chart.destroy();
+    });
+    charts = {};
+    
+    if (items.includes('updown')) {
+        const upDownCtx = document.getElementById('upDownChart').getContext('2d');
+        charts.upDown = new Chart(upDownCtx, createChartConfig(labels, [
+            {
+                label: '上涨',
+                data: currentData.map(d => d.up_count),
+                borderColor: '#ff6b6b',
+                backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                tension: 0.4,
+                fill: true
+            },
+            {
+                label: '下跌',
+                data: currentData.map(d => d.down_count),
+                borderColor: '#51cf66',
+                backgroundColor: 'rgba(81, 207, 102, 0.1)',
+                tension: 0.4,
+                fill: true
+            },
+            {
+                label: '平盘',
+                data: currentData.map(d => d.flat_count),
+                borderColor: '#ffd43b',
+                backgroundColor: 'rgba(255, 212, 59, 0.1)',
+                tension: 0.4,
+                fill: true
+            }
+        ], '涨跌数量趋势'));
+    }
+    
+    if (items.includes('limit')) {
+        const limitCtx = document.getElementById('limitChart').getContext('2d');
+        charts.limit = new Chart(limitCtx, createChartConfig(labels, [
+            {
+                label: '涨停',
+                data: currentData.map(d => d.limit_up_count),
+                borderColor: '#ff6b6b',
+                backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                tension: 0.4,
+                fill: true
+            },
+            {
+                label: '跌停',
+                data: currentData.map(d => d.limit_down_count),
+                borderColor: '#51cf66',
+                backgroundColor: 'rgba(81, 207, 102, 0.1)',
+                tension: 0.4,
+                fill: true
+            },
+            {
+                label: '真实涨停',
+                data: currentData.map(d => d.real_limit_up_count),
+                borderColor: '#f06595',
+                backgroundColor: 'rgba(240, 101, 149, 0.1)',
+                tension: 0.4,
+                fill: true
+            }
+        ], '涨跌停数据趋势'));
+    }
+    
+    if (items.includes('sentiment')) {
+        const sentimentCtx = document.getElementById('sentimentChart').getContext('2d');
+        charts.sentiment = new Chart(sentimentCtx, createChartConfig(labels, [
+            {
+                label: '恐慌指数',
+                data: currentData.map(d => d.fear_index),
+                borderColor: '#ff6b6b',
+                backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                tension: 0.4,
+                fill: true
+            },
+            {
+                label: '贪婪指数',
+                data: currentData.map(d => d.greed_index),
+                borderColor: '#51cf66',
+                backgroundColor: 'rgba(81, 207, 102, 0.1)',
+                tension: 0.4,
+                fill: true
+            },
+            {
+                label: '拥挤度',
+                data: currentData.map(d => d.congestion),
+                borderColor: '#667eea',
+                backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                tension: 0.4,
+                fill: true
+            }
+        ], '市场情绪趋势'));
+    }
+    
+    if (items.includes('distribution')) {
+        const upDistCtx = document.getElementById('upDistributionChart').getContext('2d');
+        charts.upDistribution = new Chart(upDistCtx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: '0-3%',
+                        data: currentData.map(d => d.up_0_3),
+                        backgroundColor: '#ff8787'
+                    },
+                    {
+                        label: '3-5%',
+                        data: currentData.map(d => d.up_3_5),
+                        backgroundColor: '#ff6b6b'
+                    },
+                    {
+                        label: '5-7%',
+                        data: currentData.map(d => d.up_5_7),
+                        backgroundColor: '#f03e3e'
+                    },
+                    {
+                        label: '7-10%',
+                        data: currentData.map(d => d.up_7_10),
+                        backgroundColor: '#c92a2a'
+                    },
+                    {
+                        label: '>10%',
+                        data: currentData.map(d => d.up_10_20),
+                        backgroundColor: '#8b0000'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: '上涨分布'
+                    },
+                    legend: {
+                        position: 'top'
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked: true
+                    },
+                    y: {
+                        stacked: true,
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+        
+        const downDistCtx = document.getElementById('downDistributionChart').getContext('2d');
+        charts.downDistribution = new Chart(downDistCtx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: '0-3%',
+                        data: currentData.map(d => d.down_0_3),
+                        backgroundColor: '#8ce99a'
+                    },
+                    {
+                        label: '3-5%',
+                        data: currentData.map(d => d.down_3_5),
+                        backgroundColor: '#69db7c'
+                    },
+                    {
+                        label: '5-7%',
+                        data: currentData.map(d => d.down_5_7),
+                        backgroundColor: '#51cf66'
+                    },
+                    {
+                        label: '7-10%',
+                        data: currentData.map(d => d.down_7_10),
+                        backgroundColor: '#40c057'
+                    },
+                    {
+                        label: '>10%',
+                        data: currentData.map(d => d.down_10_20),
+                        backgroundColor: '#2f9e44'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: '下跌分布'
+                    },
+                    legend: {
+                        position: 'top'
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked: true
+                    },
+                    y: {
+                        stacked: true,
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+    
+    if (items.includes('surge')) {
+        loadSurgeData();
+    }
+    
+    if (items.includes('heat')) {
+        loadHeatData();
+    }
+}
+
+async function loadSurgeData() {
+    const dates = getSelectedDates();
+    if (!dates || dates.length === 0) return;
+    
+    try {
+        const response = await fetch(`/api/comparison/surge?dates=${dates.join(',')}`);
+        const result = await response.json();
+        
+        if (result.success && result.daily_summary) {
+            const surgeCountCtx = document.getElementById('surgeCountChart').getContext('2d');
+            if (charts.surgeCount) charts.surgeCount.destroy();
+            
+            charts.surgeCount = new Chart(surgeCountCtx, createChartConfig(
+                result.daily_summary.map(s => s.date),
+                [{
+                    label: '涨停数量',
+                    data: result.daily_summary.map(s => s.count),
+                    borderColor: '#ff6b6b',
+                    backgroundColor: 'rgba(255, 107, 107, 0.2)',
+                    tension: 0.4,
+                    fill: true
+                }],
+                '每日涨停数量'
+            ));
+            
+            renderSurgeDetails(result);
+        }
+    } catch (error) {
+        showToast('加载涨停数据失败: ' + error.message, 'error');
+    }
+}
+
+function renderSurgeDetails(result) {
+    const container = document.getElementById('surgeDetails');
+    let html = '';
+    
+    result.daily_summary.forEach(summary => {
+        html += `
+            <div style="margin-bottom: 20px;">
+                <h4 style="margin-bottom: 10px; color: #667eea;">${summary.date} (${summary.count}只涨停)</h4>
+                <div class="table-wrapper">
+                    <table style="font-size: 0.85em;">
+                        <thead>
+                            <tr>
+                                <th>代码</th>
+                                <th>名称</th>
+                                <th>涨幅</th>
+                                <th>涨停原因</th>
+                                <th>分类</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${summary.stocks.slice(0, 10).map(s => `
+                                <tr>
+                                    <td><strong>${s.code}</strong></td>
+                                    <td>${s.name}</td>
+                                    <td><span class="tag tag-up">${s.change_pct ? s.change_pct.toFixed(2) : '-'}%</span></td>
+                                    <td style="text-align: left;">${s.reason || '-'}</td>
+                                    <td>${s.reason_category || '-'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                ${summary.stocks.length > 10 ? `<p style="text-align: center; color: #999; margin-top: 10px;">还有 ${summary.stocks.length - 10} 只...</p>` : ''}
+            </div>
+        `;
+    });
+    
+    container.innerHTML = html;
+}
+
+async function loadHeatData() {
+    const dates = getSelectedDates();
+    if (!dates || dates.length === 0) return;
+    
+    try {
+        const response = await fetch(`/api/comparison/heat?dates=${dates.join(',')}&top=10`);
+        const result = await response.json();
+        
+        if (result.success) {
+            renderHeatDetails(result);
+        }
+    } catch (error) {
+        showToast('加载人气排名数据失败: ' + error.message, 'error');
+    }
+}
+
+function renderHeatDetails(result) {
+    const frequentContainer = document.getElementById('frequentStocks');
+    const detailsContainer = document.getElementById('heatDetails');
+    
+    if (result.frequent_stocks && result.frequent_stocks.length > 0) {
+        let frequentHtml = `
+            <h4 style="margin-bottom: 15px; color: #667eea;">多次上榜股票</h4>
+            <div class="table-wrapper">
+                <table style="font-size: 0.85em;">
+                    <thead>
+                        <tr>
+                            <th>代码</th>
+                            <th>名称</th>
+                            <th>上榜次数</th>
+                            <th>上榜日期</th>
+                            <th>总热度</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${result.frequent_stocks.slice(0, 10).map(s => `
+                            <tr>
+                                <td><strong>${s.code}</strong></td>
+                                <td>${s.name}</td>
+                                <td><span class="tag tag-up">${s.appear_count}次</span></td>
+                                <td style="text-align: left; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${s.dates.join(', ')}</td>
+                                <td>${s.total_score.toFixed(1)}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+        frequentContainer.innerHTML = frequentHtml;
+    }
+    
+    if (result.top_heat_by_date) {
+        let detailsHtml = '<h4 style="margin: 20px 0 15px; color: #667eea;">每日人气TOP10</h4>';
+        
+        const sortedDates = Object.keys(result.top_heat_by_date).sort();
+        sortedDates.forEach(date => {
+            const stocks = result.top_heat_by_date[date];
+            detailsHtml += `
+                <div style="margin-bottom: 20px;">
+                    <h5 style="margin-bottom: 10px;">${date}</h5>
+                    <div class="table-wrapper">
+                        <table style="font-size: 0.85em;">
+                            <thead>
+                                <tr>
+                                    <th>排名</th>
+                                    <th>代码</th>
+                                    <th>名称</th>
+                                    <th>热度分</th>
+                                    <th>问财</th>
+                                    <th>雪球</th>
+                                    <th>东财</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${stocks.map((s, idx) => `
+                                    <tr ${idx < 3 ? 'style="background: linear-gradient(135deg, #fff9db 0%, #fff3bf 100%);"' : ''}>
+                                        <td style="font-weight: 700;">${idx + 1}</td>
+                                        <td><strong>${s.code}</strong></td>
+                                        <td>${s.name}</td>
+                                        <td><strong>${s.composite_score.toFixed(1)}</strong></td>
+                                        <td>${s.wencai_rank > 0 ? s.wencai_rank : '-'}</td>
+                                        <td>${s.xueqiu_rank > 0 ? s.xueqiu_rank : '-'}</td>
+                                        <td>${s.eastmoney_rank > 0 ? s.eastmoney_rank : '-'}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        });
+        
+        detailsContainer.innerHTML = detailsHtml;
+    }
+}
+
+function renderDataTable() {
+    if (!currentData || currentData.length === 0) return;
+    
+    const tbody = document.getElementById('dataTableBody');
+    tbody.innerHTML = currentData.map(d => `
+        <tr>
+            <td><strong>${d.date}</strong></td>
+            <td><span class="tag tag-up">${formatNumber(d.up_count)}</span></td>
+            <td><span class="tag tag-down">${formatNumber(d.down_count)}</span></td>
+            <td>${formatNumber(d.flat_count)}</td>
+            <td><span class="tag tag-up">${formatNumber(d.limit_up_count)}</span></td>
+            <td><span class="tag tag-down">${formatNumber(d.limit_down_count)}</span></td>
+            <td>${formatNumber(d.real_limit_up_count)}</td>
+            <td>${formatPercent(d.congestion)}</td>
+            <td><span class="tag tag-up">${formatPercent(d.fear_index)}</span></td>
+            <td><span class="tag tag-down">${formatPercent(d.greed_index)}</span></td>
+        </tr>
+    `).join('');
+}
+
+function clearSelection() {
+    document.getElementById('startDate').value = '';
+    document.getElementById('endDate').value = '';
+    document.querySelectorAll('.data-item').forEach(cb => {
+        if (['updown', 'limit', 'sentiment'].includes(cb.value)) {
+            cb.checked = true;
+        } else {
+            cb.checked = false;
+        }
+    });
+    document.getElementById('chartsContainer').style.display = 'none';
+    document.getElementById('noDataSection').style.display = 'none';
+    document.getElementById('dataTableBody').innerHTML = `
+        <tr>
+            <td colspan="10" style="text-align: center; color: #999; padding: 30px;">
+                请先加载数据
+            </td>
+        </tr>
+    `;
+}
+
+document.getElementById('loadDataBtn').addEventListener('click', loadMarketData);
+document.getElementById('clearSelectionBtn').addEventListener('click', clearSelection);
+
+document.querySelectorAll('.data-item').forEach(cb => {
+    cb.addEventListener('change', () => {
+        if (currentData) {
+            renderCharts();
+        }
+    });
+});
+</script>
+{% endblock %}
