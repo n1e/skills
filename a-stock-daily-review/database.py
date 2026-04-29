@@ -192,8 +192,13 @@ class DatabaseManager:
             
             news_json = json.dumps([
                 {
-                    'title': n.title, 'source': n.source,
-                    'url': n.url, 'heat_score': n.heat_score if hasattr(n, 'heat_score') else 0
+                    'title': n.title,
+                    'sources': n.sources if hasattr(n, 'sources') else [],
+                    'source_count': n.source_count if hasattr(n, 'source_count') else 0,
+                    'representative_url': n.representative_url if hasattr(n, 'representative_url') else '',
+                    'composite_score': n.composite_score if hasattr(n, 'composite_score') else 0.0,
+                    'avg_hot_score': n.avg_hot_score if hasattr(n, 'avg_hot_score') else 0.0,
+                    'rank': n.rank if hasattr(n, 'rank') else 0
                 } 
                 for n in review.news_ranks
             ], ensure_ascii=False)
@@ -215,8 +220,12 @@ class DatabaseManager:
             return True
             
         except Exception as e:
-            logger.error(f"保存复盘数据失败: {e}")
-            conn.rollback()
+            logger.error(f"保存复盘数据失败: {e}", exc_info=True)
+            # 尝试回滚事务，但如果没有活动事务则忽略错误
+            try:
+                conn.rollback()
+            except Exception as rollback_error:
+                logger.warning(f"回滚事务失败（可能没有活动事务）: {rollback_error}")
             return False
         finally:
             conn.close()
@@ -328,7 +337,7 @@ class DatabaseManager:
                     for h in heat_list
                 ]
             
-            # 解析新闻排名（简化处理）
+            # 解析新闻排名
             if result[5]:
                 from models.news import CompositeNewsRank
                 news_list = json.loads(result[5])
@@ -336,8 +345,12 @@ class DatabaseManager:
                 for n in news_list:
                     nr = CompositeNewsRank()
                     nr.title = n.get('title', '')
-                    nr.source = n.get('source', '')
-                    nr.url = n.get('url', '')
+                    nr.sources = n.get('sources', [])
+                    nr.source_count = n.get('source_count', 0)
+                    nr.representative_url = n.get('representative_url', '')
+                    nr.composite_score = n.get('composite_score', 0.0)
+                    nr.avg_hot_score = n.get('avg_hot_score', 0.0)
+                    nr.rank = n.get('rank', 0)
                     review.news_ranks.append(nr)
             
             return review
