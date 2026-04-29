@@ -23,7 +23,7 @@ from logger import setup_logger, logger
 from models.market import MarketData
 from models.stock import SurgeStock, CompositeHeatRank
 from models.review import DailyReview
-from fetcher.wencai import WencaiFetcher
+from fetcher.wencai import WencaiFetcher, check_api_key_configured, get_api_key_reminder
 from fetcher.xueqiu import XueqiuFetcher
 from fetcher.eastmoney import EastmoneyFetcher
 from fetcher.legu import LeguFetcher
@@ -374,13 +374,13 @@ def build_review_data(date: str) -> DailyReview:
     return review
 
 
-def generate_report(review: DailyReview, output_format: str = 'md', output_path: str = None) -> str:
+def generate_report(review: DailyReview, output_format: str = 'html', output_path: str = None) -> str:
     """
     生成复盘报告
     
     Args:
         review: 复盘数据对象
-        output_format: 输出格式 ('md', 'json' 或 'pdf')
+        output_format: 输出格式 ('md', 'json', 'pdf' 或 'html')
         output_path: 输出文件路径（可选）
         
     Returns:
@@ -431,7 +431,7 @@ def generate_report(review: DailyReview, output_format: str = 'md', output_path:
 
 # ==================== 服务模式相关函数 ====================
 
-def execute_review_task(date: str = None, output_format: str = 'md') -> DailyReview:
+def execute_review_task(date: str = None, output_format: str = 'html') -> DailyReview:
     """
     执行复盘任务（用于定时任务）
     同时保存到数据库和生成文件
@@ -605,10 +605,10 @@ def main():
                        help='运行模式: standalone(独立模式，默认) 或 service(服务模式)')
     
     # 通用参数
-    parser.add_argument('--format', choices=['md', 'json', 'pdf', 'html'], default='md',
-                       help='输出格式 (默认: md)')
+    parser.add_argument('--format', choices=['md', 'json', 'pdf', 'html'], default='html',
+                       help='输出格式 (默认: html)')
     parser.add_argument('--output', type=str, default='',
-                       help='输出文件路径 (仅standalone模式有效，默认: output/review_YYYY-MM-DD.md)')
+                       help='输出文件路径 (仅standalone模式有效，默认: output/review_YYYY-MM-DD.html)')
     parser.add_argument('--date', type=str, default='',
                        help='复盘日期 (仅standalone模式有效，格式: YYYY-MM-DD, 默认今天)')
     parser.add_argument('--debug', action='store_true',
@@ -632,6 +632,16 @@ def main():
     logger.info("A股每日复盘报告生成器启动")
     logger.info(f"运行模式: {args.mode}")
     logger.info("=" * 60)
+    
+    # 检查问财 API Key 是否配置
+    if not check_api_key_configured():
+        logger.warning(get_api_key_reminder())
+        print("\n" + "=" * 60)
+        print("⚠️  警告：问财 API Key 未配置")
+        print("=" * 60)
+        print("问财数据查询功能将无法使用（成交额历史、涨停股票、人气排名）")
+        print("请配置 IWENCAI_API_KEY 环境变量后重新运行")
+        print("=" * 60 + "\n")
     
     # 处理服务模式的额外参数
     if args.mode == 'service':
