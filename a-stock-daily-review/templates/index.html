@@ -9,6 +9,55 @@
     <p class="page-subtitle">自动收集市场数据，生成专业复盘报告</p>
 </div>
 
+<!-- 任务状态和操作区 -->
+<div class="card" style="margin-bottom: 30px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+        <div>
+            <div style="font-weight: 600; margin-bottom: 5px;">复盘任务状态</div>
+            <div id="task-status-display">
+                {% if task_status.is_running %}
+                <span class="tag" style="background: #fff3cd; color: #856404;">
+                    <span style="display: inline-block; width: 8px; height: 8px; background: #856404; border-radius: 50%; margin-right: 5px; animation: pulse 1s infinite;"></span>
+                    运行中...
+                </span>
+                {% elif task_status.status == 'success' %}
+                <span class="tag" style="background: #d4edda; color: #155724;">
+                    ✅ 已完成
+                </span>
+                {% elif task_status.status == 'failed' %}
+                <span class="tag" style="background: #f8d7da; color: #721c24;">
+                    ❌ 失败
+                </span>
+                {% else %}
+                <span class="tag" style="background: #e2e3e5; color: #383d41;">
+                    ⏸️ 空闲
+                </span>
+                {% endif %}
+            </div>
+        </div>
+        <button id="trigger-btn" class="btn btn-primary" 
+                {% if task_status.is_running %}disabled{% endif %}>
+            🔄 立即执行复盘
+        </button>
+    </div>
+    {% if task_status.start_time %}
+    <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
+        开始时间: {{ task_status.start_time }}
+        {% if task_status.end_time %}
+        | 结束时间: {{ task_status.end_time }}
+        {% endif %}
+        {% if task_status.result_date %}
+        | 复盘日期: {{ task_status.result_date }}
+        {% endif %}
+        {% if task_status.error_message %}
+        <div style="color: #dc3545; margin-top: 5px;">
+            错误: {{ task_status.error_message }}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
 <!-- 统计卡片 -->
 <div class="grid-3" style="margin-bottom: 30px;">
     <div class="stat-card">
@@ -214,4 +263,146 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let statusCheckInterval = null;
+    
+    // 触发复盘任务
+    document.getElementById('trigger-btn').addEventListener('click', async function() {
+        const btn = this;
+        const originalText = btn.innerHTML;
+        
+        try {
+            // 禁用按钮并显示加载状态
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> 触发中...';
+            
+            // 调用 API 触发复盘
+            const response = await fetch('/api/review/trigger', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                showToast('复盘任务已启动，请等待完成...', 'success');
+                // 开始轮询状态
+                startStatusCheck();
+            } else {
+                showToast(result.message || '触发失败', 'error');
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+            
+        } catch (error) {
+            console.error('触发复盘失败:', error);
+            showToast('触发复盘失败: ' + error.message, 'error');
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    });
+    
+    // 开始状态检查
+    function startStatusCheck() {
+        // 立即检查一次
+        checkTaskStatus();
+        
+        // 设置定时检查
+        if (statusCheckInterval) {
+            clearInterval(statusCheckInterval);
+        }
+        statusCheckInterval = setInterval(checkTaskStatus, 3000);
+    }
+    
+    // 检查任务状态
+    async function checkTaskStatus() {
+        try {
+            const response = await fetch('/api/review/status');
+            const result = await response.json();
+            
+            if (result.success) {
+                updateTaskUI(result.task_status);
+            }
+        } catch (error) {
+            console.error('检查任务状态失败:', error);
+        }
+    }
+    
+    // 更新任务 UI
+    function updateTaskUI(taskStatus) {
+        const statusDisplay = document.getElementById('task-status-display');
+        const triggerBtn = document.getElementById('trigger-btn');
+        
+        // 更新状态显示
+        let statusHtml = '';
+        if (taskStatus.is_running) {
+            statusHtml = `
+                <span class="tag" style="background: #fff3cd; color: #856404;">
+                    <span style="display: inline-block; width: 8px; height: 8px; background: #856404; border-radius: 50%; margin-right: 5px; animation: pulse 1s infinite;"></span>
+                    运行中...
+                </span>
+            `;
+            triggerBtn.disabled = true;
+        } else if (taskStatus.status === 'success') {
+            statusHtml = `
+                <span class="tag" style="background: #d4edda; color: #155724;">
+                    ✅ 已完成
+                </span>
+            `;
+            triggerBtn.disabled = false;
+            // 停止轮询
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+                statusCheckInterval = null;
+            }
+            showToast('复盘任务完成！', 'success');
+        } else if (taskStatus.status === 'failed') {
+            statusHtml = `
+                <span class="tag" style="background: #f8d7da; color: #721c24;">
+                    ❌ 失败
+                </span>
+            `;
+            triggerBtn.disabled = false;
+            // 停止轮询
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+                statusCheckInterval = null;
+            }
+            showToast('复盘任务失败: ' + (taskStatus.error_message || '未知错误'), 'error');
+        } else {
+            statusHtml = `
+                <span class="tag" style="background: #e2e3e5; color: #383d41;">
+                    ⏸️ 空闲
+                </span>
+            `;
+            triggerBtn.disabled = false;
+        }
+        
+        statusDisplay.innerHTML = statusHtml;
+    }
+    
+    // 页面加载时，如果任务正在运行，开始轮询
+    document.addEventListener('DOMContentLoaded', function() {
+        // 检查初始状态
+        const taskStatus = {{ task_status|tojson|safe }};
+        if (taskStatus.is_running) {
+            startStatusCheck();
+        }
+    });
+    
+    // 添加脉冲动画样式
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    `;
+    document.head.appendChild(style);
+</script>
 {% endblock %}
