@@ -70,13 +70,13 @@ class MarkdownGenerator:
         
         # 人气排名
         if self.review.heat_ranks:
-            lines.append(f"## 🔥 人气排名TOP50（综合排名）\n")
+            lines.append(f"## 🔥 人气排名TOP{len(self.review.heat_ranks)}（综合排名）\n")
             lines.append(self.renderer.render_heat_ranks(self.review.heat_ranks))
             lines.append("")
         
         # 新闻资讯热度排名
         if self.review.news_ranks:
-            lines.append(f"## 📰 复合资讯热度TOP30（综合排名）\n")
+            lines.append(f"## 📰 复合资讯热度TOP{len(self.review.news_ranks)}（综合排名）\n")
             lines.append(self.renderer.render_news_ranks(self.review.news_ranks))
             lines.append("")
         

@@ -601,7 +601,7 @@ class PDFGenerator:
         if not heat_ranks:
             return elements
         
-        elements.append(Paragraph("人气排名TOP50", self._styles['h1']))
+        elements.append(Paragraph(f"人气排名TOP{len(heat_ranks)}", self._styles['h1']))
         elements.append(Spacer(1, 8))
         
         rank_data = [[
@@ -613,7 +613,7 @@ class PDFGenerator:
             Paragraph("东财", self._styles['table_header']),
             Paragraph("热度分", self._styles['table_header'])
         ]]
-        for i, r in enumerate(heat_ranks[:50]):
+        for i, r in enumerate(heat_ranks):
             wc = str(r.wencai_rank) if r.wencai_rank > 0 else "-"
             xq = str(r.xueqiu_rank) if r.xueqiu_rank > 0 else "-"
             em = str(r.eastmoney_rank) if r.eastmoney_rank > 0 else "-"
@@ -654,7 +654,7 @@ class PDFGenerator:
         if not news_ranks:
             return elements
         
-        elements.append(Paragraph("复合资讯热度TOP30", self._styles['h1']))
+        elements.append(Paragraph(f"复合资讯热度TOP{len(news_ranks)}", self._styles['h1']))
         elements.append(Spacer(1, 8))
         
         news_data = [[
@@ -664,7 +664,7 @@ class PDFGenerator:
             Paragraph("来源平台", self._styles['table_header']),
             Paragraph("热度分", self._styles['table_header'])
         ]]
-        for i, r in enumerate(news_ranks[:30]):
+        for i, r in enumerate(news_ranks):
             title = r.title[:35] + "..." if len(r.title) > 35 else r.title
             sources = ', '.join(r.sources) if r.sources else ''
             sources = sources[:15] + "..." if len(sources) > 15 else sources
@@ -726,7 +726,7 @@ class PDFGenerator:
             Paragraph("涨停原因", self._styles['table_header'])
         ]]
         sorted_stocks = sorted(surge_stocks, key=lambda x: x.change_pct, reverse=True)
-        for stock in sorted_stocks[:50]:
+        for stock in sorted_stocks:
             reason = stock.reason or ""
             if len(reason) > 40:
                 reason = reason[:40] + "..."
