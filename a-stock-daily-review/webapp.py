@@ -7,6 +7,7 @@ Web服务模块
 
 import json
 import os
+import threading
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -17,18 +18,73 @@ from database import get_database
 from fetcher.hexin_analyzer import HexinStockAnalyzer, get_stock_detail
 
 
+class ReviewTask:
+    """复盘任务状态管理"""
+    
+    def __init__(self):
+        self.status = 'idle'  # idle, running, success, failed
+        self.start_time = None
+        self.end_time = None
+        self.error_message = None
+        self.result_date = None
+        self._lock = threading.Lock()
+    
+    def start(self):
+        """开始任务"""
+        with self._lock:
+            self.status = 'running'
+            self.start_time = datetime.now()
+            self.end_time = None
+            self.error_message = None
+            self.result_date = None
+            logger.info("复盘任务开始执行")
+    
+    def complete(self, date: str):
+        """任务完成"""
+        with self._lock:
+            self.status = 'success'
+            self.end_time = datetime.now()
+            self.result_date = date
+            logger.info(f"复盘任务完成: {date}")
+    
+    def fail(self, error_message: str):
+        """任务失败"""
+        with self._lock:
+            self.status = 'failed'
+            self.end_time = datetime.now()
+            self.error_message = error_message
+            logger.error(f"复盘任务失败: {error_message}")
+    
+    def get_status(self) -> Dict[str, Any]:
+        """获取任务状态"""
+        with self._lock:
+            return {
+                'status': self.status,
+                'start_time': self.start_time.isoformat() if self.start_time else None,
+                'end_time': self.end_time.isoformat() if self.end_time else None,
+                'error_message': self.error_message,
+                'result_date': self.result_date,
+                'is_running': self.status == 'running'
+            }
+
+
 class WebApp:
     """
     Web应用类
     封装Flask应用和路由
     """
     
-    def __init__(self, debug: bool = False):
+    # 全局复盘任务实例
+    _review_task = ReviewTask()
+    _execute_callback = None
+    
+    def __init__(self, debug: bool = False, execute_callback=None):
         """
         初始化Web应用
         
         Args:
             debug: 是否启用调试模式
+            execute_callback: 复盘执行回调函数
         """
         self.app = Flask(__name__, 
                          template_folder=os.path.join(os.path.dirname(__file__), 'templates'),
@@ -36,6 +92,10 @@ class WebApp:
         self.app.debug = debug
         self.db = get_database()
         self.stock_analyzer = HexinStockAnalyzer()
+        
+        # 设置复盘执行回调
+        if execute_callback:
+            WebApp._execute_callback = execute_callback
         
         self._register_routes()
     
@@ -56,11 +116,15 @@ class WebApp:
             # 获取自选股列表
             watchlist = self.db.get_watchlist()
             
+            # 获取复盘任务状态
+            task_status = WebApp._review_task.get_status()
+            
             return render_template('index.html',
                                    dates=dates,
                                    latest_review=latest_review,
                                    watchlist=watchlist,
-                                   now=datetime.now())
+                                   now=datetime.now(),
+                                   task_status=task_status)
         
         @self.app.route('/review/<date>')
         def review_detail(date):
@@ -422,13 +486,69 @@ class WebApp:
             dates = self.db.get_available_dates()
             watchlist = self.db.get_watchlist()
             
+            # 获取复盘任务状态
+            task_status = WebApp._review_task.get_status()
+            
             return jsonify({
                 'success': True,
                 'status': 'running',
                 'time': datetime.now().isoformat(),
                 'review_count': len(dates),
                 'latest_review': dates[0] if dates else None,
-                'watchlist_count': len(watchlist)
+                'watchlist_count': len(watchlist),
+                'review_task': task_status
+            })
+        
+        @self.app.route('/api/review/trigger', methods=['POST'])
+        def api_trigger_review():
+            """API: 手动触发复盘任务"""
+            task = WebApp._review_task
+            
+            # 检查是否有任务正在运行
+            if task.get_status()['is_running']:
+                return jsonify({
+                    'success': False,
+                    'message': '复盘任务正在运行中，请稍后再试'
+                }), 400
+            
+            # 检查是否有回调函数
+            if not WebApp._execute_callback:
+                return jsonify({
+                    'success': False,
+                    'message': '复盘执行回调未配置，无法触发任务'
+                }), 500
+            
+            # 定义异步执行函数
+            def run_review():
+                try:
+                    task.start()
+                    # 执行复盘任务
+                    result = WebApp._execute_callback()
+                    # 获取结果日期
+                    review_date = result.date if hasattr(result, 'date') else datetime.now().strftime('%Y-%m-%d')
+                    task.complete(review_date)
+                except Exception as e:
+                    logger.error(f"复盘任务执行异常: {e}", exc_info=True)
+                    task.fail(str(e))
+            
+            # 启动异步线程执行
+            thread = threading.Thread(target=run_review, daemon=True)
+            thread.start()
+            
+            return jsonify({
+                'success': True,
+                'message': '复盘任务已启动',
+                'task_status': task.get_status()
+            })
+        
+        @self.app.route('/api/review/status')
+        def api_review_status():
+            """API: 获取复盘任务状态"""
+            task_status = WebApp._review_task.get_status()
+            
+            return jsonify({
+                'success': True,
+                'task_status': task_status
             })
         
         @self.app.route('/comparison')
@@ -674,15 +794,16 @@ class WebApp:
 
 
 # 便捷函数
-def create_app(debug: bool = False) -> Flask:
+def create_app(debug: bool = False, execute_callback=None) -> Flask:
     """
     创建Flask应用实例
     
     Args:
         debug: 是否启用调试模式
+        execute_callback: 复盘执行回调函数
         
     Returns:
         Flask应用实例
     """
-    web_app = WebApp(debug=debug)
+    web_app = WebApp(debug=debug, execute_callback=execute_callback)
     return web_app.app

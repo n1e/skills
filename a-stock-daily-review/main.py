@@ -434,7 +434,7 @@ def generate_report(review: DailyReview, output_format: str = 'html', output_pat
 def execute_review_task(date: str = None, output_format: str = 'html') -> DailyReview:
     """
     执行复盘任务（用于定时任务）
-    同时保存到数据库和生成文件
+    同时保存到数据库、生成文件和推送
     
     Args:
         date: 复盘日期，默认今天
@@ -467,7 +467,58 @@ def execute_review_task(date: str = None, output_format: str = 'html') -> DailyR
     else:
         logger.warning("服务模式模块不可用，跳过数据库保存")
     
+    # 推送报告
+    _push_report(review, output_format)
+    
     return review
+
+
+def _push_report(review: DailyReview, output_format: str = 'html'):
+    """
+    推送复盘报告
+    
+    Args:
+        review: 复盘数据对象
+        output_format: 输出格式
+    """
+    try:
+        # 导入推送管理器（延迟导入，避免循环依赖）
+        from pusher.manager import get_push_manager
+        
+        push_manager = get_push_manager()
+        
+        if not push_manager.is_available():
+            logger.info("没有可用的推送器，跳过推送")
+            return
+        
+        # 构建文件路径
+        output_dir = config.get('output_dir', 'output')
+        filename = f"review_{review.date}.{output_format}"
+        file_path = os.path.join(output_dir, filename)
+        
+        if not os.path.exists(file_path):
+            logger.warning(f"报告文件不存在，无法推送: {file_path}")
+            return
+        
+        # 推送文件
+        title = f"A股每日复盘报告 - {review.date}"
+        results = push_manager.push_file(file_path, title)
+        
+        # 记录推送结果
+        success_count = sum(1 for success in results.values() if success)
+        total_count = len(results)
+        
+        if success_count == total_count:
+            logger.info(f"所有推送器推送成功: {success_count}/{total_count}")
+        elif success_count > 0:
+            logger.warning(f"部分推送器推送成功: {success_count}/{total_count}")
+        else:
+            logger.error(f"所有推送器推送失败: {success_count}/{total_count}")
+            
+    except ImportError as e:
+        logger.warning(f"推送模块导入失败，跳过推送: {e}")
+    except Exception as e:
+        logger.error(f"推送报告失败: {e}", exc_info=True)
 
 
 def run_standalone_mode(args):
@@ -562,8 +613,12 @@ def run_service_mode(args):
         scheduler.add_daily_task(hour=hour, minute=minute)
         scheduler.start()
         
-        # 创建Flask应用
-        app = create_app(debug=args.debug)
+        # 创建Flask应用，传入复盘执行回调
+        def trigger_review():
+            """触发复盘任务的回调函数"""
+            return execute_review_task(output_format=args.format)
+        
+        app = create_app(debug=args.debug, execute_callback=trigger_review)
         
         # 在Flask启动前初始化数据库
         get_database()
