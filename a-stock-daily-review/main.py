@@ -181,7 +181,7 @@ def collect_surge_stocks(fetcher: WencaiFetcher, min_change: float = 9.5, max_st
     return stocks
 
 
-def collect_heat_ranks(wencai_fetcher: WencaiFetcher, top: int = 50):
+def collect_heat_ranks(wencai_fetcher: WencaiFetcher, top: int = 50, sources: list = None):
     """
     收集人气排名（多数据源并发：问财+雪球+东财）
     注：问财就是同花顺的数据，不需要单独调用同花顺接口
@@ -189,29 +189,41 @@ def collect_heat_ranks(wencai_fetcher: WencaiFetcher, top: int = 50):
     Args:
         wencai_fetcher: 问财采集器实例（复用已有会话）
         top: 获取排名数量
+        sources: 数据源列表，默认为 ['wencai', 'xueqiu', 'eastmoney', 'thsi']
+                 注意：'thsi' (同花顺) 与 'wencai' 使用相同的数据
 
     Returns:
         (问财排名, 雪球排名, 东财排名) 元组
     """
-    logger.info(f"开始收集人气排名TOP{top}")
+    if sources is None:
+        sources = ['wencai', 'xueqiu', 'eastmoney', 'thsi']
+    
+    logger.info(f"开始收集人气排名TOP{top} (数据源: {sources})")
 
     wencai_ranks, xueqiu_ranks, eastmoney_ranks = [], [], []
-
-    def fetch_wencai():
-        return wencai_fetcher.get_heat_rank(top)
-
-    def fetch_xueqiu():
-        return XueqiuFetcher().fetch(top)
-
-    def fetch_eastmoney():
-        return EastmoneyFetcher().fetch(top)
+    
+    # 确定需要启用的数据源
+    # 注意：'wencai' 和 'thsi' 都是问财/同花顺数据
+    enable_wencai = 'wencai' in sources or 'thsi' in sources
+    enable_xueqiu = 'xueqiu' in sources
+    enable_eastmoney = 'eastmoney' in sources
 
     with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {
-            executor.submit(fetch_wencai): 'wencai',
-            executor.submit(fetch_xueqiu): 'xueqiu',
-            executor.submit(fetch_eastmoney): 'eastmoney',
-        }
+        futures = {}
+        
+        if enable_wencai:
+            futures[executor.submit(lambda: wencai_fetcher.get_heat_rank(top))] = 'wencai'
+        
+        if enable_xueqiu:
+            futures[executor.submit(lambda: XueqiuFetcher().fetch(top))] = 'xueqiu'
+        
+        if enable_eastmoney:
+            futures[executor.submit(lambda: EastmoneyFetcher().fetch(top))] = 'eastmoney'
+        
+        if not futures:
+            logger.warning("没有启用任何人气排名数据源")
+            return [], [], []
+
         for future in as_completed(futures):
             source = futures[future]
             try:
@@ -231,19 +243,30 @@ def collect_heat_ranks(wencai_fetcher: WencaiFetcher, top: int = 50):
     return wencai_ranks, xueqiu_ranks, eastmoney_ranks
 
 
-def collect_news_data(top: int = 30):
+def collect_news_data(top: int = 30, sources: list = None):
     """
     收集新闻资讯并计算复合热度排名
 
     Args:
         top: 返回前N名
+        sources: 新闻来源列表，为 None 时使用所有可用的采集器
 
     Returns:
         复合资讯热度排名列表
     """
-    logger.info(f"开始收集新闻资讯（复合热度排名TOP{top}）")
+    from news_fetcher import get_collectors_by_names
+    
+    if sources is None:
+        collectors = get_all_collectors()
+        logger.info(f"开始收集新闻资讯（复合热度排名TOP{top}，使用所有来源）")
+    else:
+        collectors = get_collectors_by_names(sources)
+        logger.info(f"开始收集新闻资讯（复合热度排名TOP{top}，数据源: {sources}）")
+    
+    if not collectors:
+        logger.warning("没有可用的新闻采集器")
+        return []
 
-    collectors = get_all_collectors()
     all_news = []
     source_news = {}
 
@@ -295,6 +318,7 @@ def collect_news_data(top: int = 30):
 def build_review_data(date: str) -> DailyReview:
     """
     构建完整的复盘数据（支持部分缓存，已成功的步骤不会重新获取）
+    所有参数都从配置读取，支持热生效（下次执行任务时使用新配置）
 
     Args:
         date: 复盘日期
@@ -310,33 +334,54 @@ def build_review_data(date: str) -> DailyReview:
     review.date = date
     cache = _load_cache(date)
 
-    # 从配置读取参数
-    min_change = config.get('surge.min_change_pct', 9.5)
+    # 从配置读取所有参数（每次执行都重新读取，支持热生效）
+    min_change = config.get('market.min_change_pct', 9.5)  # 市场涨停阈值
+    surge_min_change = config.get('surge.min_change_pct', 9.5)  # 涨停股票阈值
     max_stocks = config.get('surge.max_stocks', 200)
+    volume_days = config.get('volume_history.days', 30)
     top_rank = config.get('heat_rank.top', 50)
+    heat_sources = config.get('heat_rank.sources', ['wencai', 'xueqiu', 'eastmoney', 'thsi'])
     news_top = config.get('news_rank.top', 30)
     news_enabled = config.get('news_rank.enabled', True)
+    news_sources = config.get('news_rank.sources', None)  # None 表示使用所有来源
+
+    logger.info(f"当前配置:")
+    logger.info(f"  - 市场涨停阈值: {min_change}%")
+    logger.info(f"  - 涨停股票阈值: {surge_min_change}%")
+    logger.info(f"  - 涨停股票最大数量: {max_stocks}")
+    logger.info(f"  - 成交量历史天数: {volume_days}")
+    logger.info(f"  - 人气排名数量: {top_rank}")
+    logger.info(f"  - 人气排名数据源: {heat_sources}")
+    logger.info(f"  - 新闻热度: {'启用' if news_enabled else '禁用'}")
+    if news_enabled:
+        logger.info(f"  - 新闻排名数量: {news_top}")
+        if news_sources:
+            logger.info(f"  - 新闻数据源: {news_sources}")
 
     # 1. 收集大盘数据
     logger.info("\n[1/5] 收集大盘数据")
-    wencai_fetcher = WencaiFetcher()
+    wencai_fetcher = WencaiFetcher()  # 每次创建新实例，自动读取最新配置
     legu_fetcher = LeguFetcher()
     review.market = collect_market_data(legu_fetcher)
 
     # 2. 收集成交量历史
     logger.info("\n[2/5] 收集成交量历史")
-    review.volume_history = collect_volume_history(wencai_fetcher, days=30)
+    review.volume_history = collect_volume_history(wencai_fetcher, days=volume_days)
 
     # 3. 收集涨停股票
     logger.info("\n[3/5] 收集涨停股票")
-    review.surge_stocks = collect_surge_stocks(wencai_fetcher, min_change, max_stocks)
+    review.surge_stocks = collect_surge_stocks(wencai_fetcher, surge_min_change, max_stocks)
     for stock in review.surge_stocks:
         if not stock.reason_category:
             stock.reason_category = ReasonAnalyzer.analyze(stock.reason)
 
-    # 4. 收集人气排名（整合雪球、东财、问财三大平台的综合排名TOP50）
-    logger.info("\n[4/5] 收集人气排名（整合雪球、东财、问财三大平台）")
-    wencai_ranks, xueqiu_ranks, eastmoney_ranks = collect_heat_ranks(wencai_fetcher, top_rank)
+    # 4. 收集人气排名（整合雪球、东财、问财三大平台的综合排名）
+    logger.info(f"\n[4/5] 收集人气排名（数据源: {heat_sources}）")
+    wencai_ranks, xueqiu_ranks, eastmoney_ranks = collect_heat_ranks(
+        wencai_fetcher, 
+        top_rank, 
+        sources=heat_sources
+    )
     review.heat_ranks = HeatRanker.calculate_composite_heat(
         wencai_ranks=wencai_ranks,
         xueqiu_ranks=xueqiu_ranks,
@@ -344,10 +389,10 @@ def build_review_data(date: str) -> DailyReview:
         top=top_rank,
     )
 
-    # 5. 收集新闻资讯热度排名（复合资讯热度TOP30）
+    # 5. 收集新闻资讯热度排名（复合资讯热度排名）
     if news_enabled:
         logger.info(f"\n[5/5] 收集新闻资讯热度排名（复合热度TOP{news_top}）")
-        review.news_ranks = collect_news_data(top=news_top)
+        review.news_ranks = collect_news_data(top=news_top, sources=news_sources)
     else:
         logger.info("\n[5/5] 新闻资讯排名已禁用，跳过")
         review.news_ranks = []

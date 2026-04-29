@@ -138,7 +138,7 @@ class TemplateRenderer:
         lines.append("| 排名 | 代码 | 名称 | 问财排名 | 雪球排名 | 东财排名 | 热度分 |")
         lines.append("|------|------|------|---------|---------|---------|--------|")
         
-        for i, r in enumerate(heat_ranks[:50]):
+        for i, r in enumerate(heat_ranks):
             wc = str(r.wencai_rank) if r.wencai_rank > 0 else "-"
             xq = str(r.xueqiu_rank) if r.xueqiu_rank > 0 else "-"
             em = str(r.eastmoney_rank) if r.eastmoney_rank > 0 else "-"
@@ -157,7 +157,7 @@ class TemplateRenderer:
         lines.append("| 排名 | 资讯标题 | 来源数 | 来源平台 | 热度分 |")
         lines.append("|------|---------|--------|---------|--------|")
         
-        for i, r in enumerate(news_ranks[:30]):
+        for i, r in enumerate(news_ranks):
             title = r.title[:40] + "..." if len(r.title) > 40 else r.title
             sources = ', '.join(r.sources) if r.sources else ''
             sources = sources[:20] + "..." if len(sources) > 20 else sources

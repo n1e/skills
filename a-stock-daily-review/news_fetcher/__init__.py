@@ -1,4 +1,6 @@
 """新闻采集器模块 - 从多个站点采集新闻热榜"""
+from typing import Dict, List, Optional, Any
+
 from .base import BaseNewsCollector
 from .weibo import WeiboCollector
 from .zhihu import ZhihuCollector
@@ -45,6 +47,31 @@ COLLECTORS = {
 def get_all_collectors():
     """获取所有可用的采集器"""
     return {k: v for k, v in COLLECTORS.items() if v is not None}
+
+
+def get_collectors_by_names(names: List[str]) -> Dict[str, Any]:
+    """
+    根据名称列表获取采集器（用于配置过滤）
+    
+    Args:
+        names: 采集器名称列表
+        
+    Returns:
+        过滤后的采集器字典
+    """
+    all_collectors = get_all_collectors()
+    result = {}
+    
+    for name in names:
+        name = name.strip()
+        if name in all_collectors:
+            result[name] = all_collectors[name]
+        elif name == "36kr":
+            # 兼容36kr的别名
+            if "36kr" in all_collectors:
+                result[name] = all_collectors["36kr"]
+    
+    return result
 
 
 def get_collector_names():

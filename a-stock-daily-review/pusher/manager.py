@@ -174,6 +174,39 @@ class PushManager:
             是否有可用的推送器
         """
         return len(self._pushers) > 0
+    
+    def reload(self) -> int:
+        """
+        重新初始化所有推送器（热生效）
+        
+        Returns:
+            成功初始化的推送器数量
+        """
+        logger.info("正在重新初始化推送器...")
+        
+        # 清空现有推送器
+        old_count = len(self._pushers)
+        self._pushers.clear()
+        
+        # 重新初始化
+        self._init_pushers()
+        
+        new_count = len(self._pushers)
+        logger.info(f"推送器重新初始化完成: {old_count} -> {new_count}")
+        
+        return new_count
+    
+    def register_config_callback(self):
+        """
+        注册配置变更回调，实现热更新推送配置
+        """
+        def on_push_config_change(key_changed, old_value, new_value):
+            logger.info(f"检测到推送配置变更: {key_changed} = {new_value}")
+            self.reload()
+        
+        # 注册推送配置变更回调（监听整个push节点的变更）
+        config.on_change('push', on_push_config_change)
+        logger.info("已注册推送配置变更回调")
 
 
 # 全局推送管理器实例
@@ -193,4 +226,15 @@ def get_push_manager(config_instance=None) -> PushManager:
     global _push_manager_instance
     if _push_manager_instance is None:
         _push_manager_instance = PushManager(config_instance)
+        # 注册配置变更回调
+        _push_manager_instance.register_config_callback()
     return _push_manager_instance
+
+
+def reset_push_manager():
+    """
+    重置推送管理器实例（用于测试或配置完全变更时）
+    """
+    global _push_manager_instance
+    _push_manager_instance = None
+    logger.info("推送管理器实例已重置")

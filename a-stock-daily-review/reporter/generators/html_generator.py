@@ -102,7 +102,7 @@ class HTMLGenerator:
         
         # 新闻资讯热度排名数据
         news_rank_data = []
-        for i, r in enumerate(self.news_ranks[:30]):
+        for i, r in enumerate(self.news_ranks):
             news_rank_data.append({
                 'rank': i + 1,
                 'title': r.title,
@@ -115,7 +115,7 @@ class HTMLGenerator:
         # 涨停股票数据
         limit_up_data = []
         sorted_stocks = sorted(self.surge_stocks, key=lambda x: x.change_pct, reverse=True)
-        for stock in sorted_stocks[:50]:
+        for stock in sorted_stocks:
             limit_up_data.append({
                 'code': stock.code,
                 'name': stock.name,
@@ -1079,11 +1079,11 @@ class HTMLGenerator:
             </div>
         </div>
         
-        <!-- 复合资讯热度TOP30 -->
+        <!-- 复合资讯热度TOP{len(self.news_ranks)} -->
         <div class="card">
             <div class="card-title">
                 <span class="icon">📰</span>
-                复合资讯热度 TOP30
+                复合资讯热度 TOP{len(self.news_ranks)}
             </div>
             <div class="table-wrapper">
                 <table id="newsRankTable">

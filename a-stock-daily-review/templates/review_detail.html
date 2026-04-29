@@ -134,7 +134,7 @@
                 </tr>
             </thead>
             <tbody>
-                {% for stock in sorted_stocks[:50] %}
+                {% for stock in sorted_stocks %}
                 <tr>
                     <td>{{ loop.index }}</td>
                     <td>{{ stock.code }}</td>
@@ -154,11 +154,6 @@
         </table>
     </div>
     
-    {% if sorted_stocks|length > 50 %}
-    <div style="margin-top: 15px; text-align: center; color: #999;">
-        还有 {{ sorted_stocks|length - 50 }} 只涨停股...
-    </div>
-    {% endif %}
 </div>
 {% endif %}
 
@@ -167,7 +162,7 @@
 <div class="card">
     <div class="card-title">
         <span class="icon">🔥</span>
-        人气排名 TOP50
+        人气排名 TOP{{ review.heat_ranks|length }}
     </div>
     
     <div class="table-wrapper">
@@ -215,7 +210,7 @@
 <div class="card">
     <div class="card-title">
         <span class="icon">📰</span>
-        复合资讯热度 TOP30
+        复合资讯热度 TOP{{ review.news_ranks|length }}
     </div>
     
     <div class="table-wrapper">
@@ -229,7 +224,7 @@
                 </tr>
             </thead>
             <tbody>
-                {% for news in review.news_ranks[:30] %}
+                {% for news in review.news_ranks %}
                 <tr>
                     <td style="font-weight: 700;">{{ loop.index }}</td>
                     <td style="text-align: left;">
