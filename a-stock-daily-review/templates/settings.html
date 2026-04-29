@@ -6,7 +6,37 @@
 <!-- 页面头部 -->
 <div class="page-header">
     <h1 class="page-title">⚙️ 系统设置</h1>
-    <p class="page-subtitle">配置系统参数，修改后立即生效</p>
+    <p class="page-subtitle">配置系统参数，支持热生效</p>
+</div>
+
+<!-- 生效时机说明 -->
+<div class="card" style="margin-bottom: 20px; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border-left: 4px solid #339af0;">
+    <div style="padding: 15px;">
+        <h4 style="margin: 0 0 10px 0; color: #1864ab;">📋 生效时机说明</h4>
+        <div style="display: flex; gap: 30px; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="tag" style="background: #e7f5ff; color: #1971c2; padding: 4px 10px; border-radius: 4px; font-size: 0.85em; font-weight: 600;">
+                    ⚡ 立即生效
+                </span>
+                <span style="color: #555; font-size: 0.9em;">保存后立即生效，无需重启</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="tag" style="background: #fff3bf; color: #e67700; padding: 4px 10px; border-radius: 4px; font-size: 0.85em; font-weight: 600;">
+                    ⏰ 下次任务生效
+                </span>
+                <span style="color: #555; font-size: 0.9em;">下次执行复盘任务时生效</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="tag" style="background: #ffe8cc; color: #c92a2a; padding: 4px 10px; border-radius: 4px; font-size: 0.85em; font-weight: 600;">
+                    🔄 需重启服务
+                </span>
+                <span style="color: #555; font-size: 0.9em;">修改后需要重启服务才能生效</span>
+            </div>
+        </div>
+        <p style="margin: 10px 0 0 0; color: #666; font-size: 0.85em;">
+            💡 提示：所有配置修改都会自动保存到配置文件，无需重启服务（除了"需重启服务"标记的配置项）。
+        </p>
+    </div>
 </div>
 
 <!-- 配置文件路径提示 -->
@@ -36,6 +66,7 @@
         <div class="card-title">
             <span class="icon">📋</span>
             基础配置
+            <span class="tag" style="margin-left: 10px; font-size: 0.7em; background: #fff3bf; color: #e67700;">⏰ 下次任务生效</span>
         </div>
         <div class="grid-2">
             <div class="form-group">
@@ -54,6 +85,7 @@
         <div class="card-title">
             <span class="icon">📈</span>
             市场配置
+            <span class="tag" style="margin-left: 10px; font-size: 0.7em; background: #fff3bf; color: #e67700;">⏰ 下次任务生效</span>
         </div>
         <div class="grid-2">
             <div class="form-group">
@@ -72,6 +104,7 @@
         <div class="card-title">
             <span class="icon">🔥</span>
             人气排名配置
+            <span class="tag" style="margin-left: 10px; font-size: 0.7em; background: #fff3bf; color: #e67700;">⏰ 下次任务生效</span>
         </div>
         <div class="grid-2">
             <div class="form-group">
@@ -79,7 +112,7 @@
                 <input type="number" class="form-input" name="heat_rank.top" id="config_heat_rank_top" placeholder="50">
             </div>
             <div class="form-group">
-                <label class="form-label">数据来源 <span style="color: #999; font-weight: normal; font-size: 0.85em;">(逗号分隔)</span></label>
+                <label class="form-label">数据来源 <span style="color: #999; font-weight: normal; font-size: 0.85em;">(逗号分隔: wencai, xueqiu, eastmoney, thsi)</span></label>
                 <input type="text" class="form-input" name="heat_rank.sources" id="config_heat_rank_sources" placeholder="wencai, xueqiu, eastmoney, thsi">
             </div>
         </div>
@@ -90,6 +123,7 @@
         <div class="card-title">
             <span class="icon">📰</span>
             新闻热度配置
+            <span class="tag" style="margin-left: 10px; font-size: 0.7em; background: #fff3bf; color: #e67700;">⏰ 下次任务生效</span>
         </div>
         <div class="grid-2">
             <div class="form-group" style="display: flex; align-items: center; gap: 15px;">
@@ -117,6 +151,7 @@
         <div class="card-title">
             <span class="icon">🚀</span>
             涨停股票配置
+            <span class="tag" style="margin-left: 10px; font-size: 0.7em; background: #fff3bf; color: #e67700;">⏰ 下次任务生效</span>
         </div>
         <div class="grid-2">
             <div class="form-group">
@@ -135,6 +170,7 @@
         <div class="card-title">
             <span class="icon">🔑</span>
             问财 API 配置
+            <span class="tag" style="margin-left: 10px; font-size: 0.7em; background: #fff3bf; color: #e67700;">⏰ 下次任务生效</span>
         </div>
         <div class="grid-2">
             <div class="form-group">
@@ -169,20 +205,28 @@
         <div class="card-title">
             <span class="icon">🖥️</span>
             服务配置
-            <span class="tag" style="margin-left: 10px; font-size: 0.7em; background: #e7f5ff; color: #1971c2;">热生效</span>
         </div>
         <div class="grid-2">
             <div class="form-group">
-                <label class="form-label">定时任务时间 <span style="color: #999; font-weight: normal; font-size: 0.85em;">(每日执行时间)</span></label>
+                <label class="form-label">
+                    定时任务时间 <span style="color: #999; font-weight: normal; font-size: 0.85em;">(每日执行时间)</span>
+                    <span class="tag" style="margin-left: 8px; font-size: 0.7em; background: #e7f5ff; color: #1971c2;">⚡ 立即生效</span>
+                </label>
                 <input type="time" class="form-input" name="service.schedule_time" id="config_service_schedule_time">
             </div>
             <div class="form-group">
-                <label class="form-label">Web 端口</label>
+                <label class="form-label">
+                    Web 端口
+                    <span class="tag" style="margin-left: 8px; font-size: 0.7em; background: #fff3bf; color: #e67700;">🔄 需重启服务</span>
+                </label>
                 <input type="number" class="form-input" name="service.web_port" id="config_service_web_port" placeholder="5000">
             </div>
         </div>
         <div class="form-group">
-            <label class="form-label">Web 监听地址</label>
+            <label class="form-label">
+                Web 监听地址
+                <span class="tag" style="margin-left: 8px; font-size: 0.7em; background: #fff3bf; color: #e67700;">🔄 需重启服务</span>
+            </label>
             <input type="text" class="form-input" name="service.web_host" id="config_service_web_host" placeholder="0.0.0.0">
         </div>
     </div>
@@ -192,7 +236,7 @@
         <div class="card-title">
             <span class="icon">📤</span>
             推送配置
-            <span class="tag" style="margin-left: 10px; font-size: 0.7em; background: #e7f5ff; color: #1971c2;">热生效</span>
+            <span class="tag" style="margin-left: 10px; font-size: 0.7em; background: #e7f5ff; color: #1971c2;">⚡ 立即生效</span>
         </div>
         
         <div class="form-group" style="display: flex; align-items: center; gap: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
