@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Web服务模块
-提供历史报表查询、自选股管理、个股详情展示等Web功能
+提供历史报表查询、自选股管理、个股详情展示、系统设置等Web功能
 """
 
 import json
@@ -14,6 +14,7 @@ from typing import Dict, List, Any, Optional
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 
 from logger import logger
+from config import config
 from database import get_database
 from fetcher.hexin_analyzer import HexinStockAnalyzer, get_stock_detail
 
@@ -779,6 +780,134 @@ class WebApp:
                 'failed_files': failed_files,
                 'message': f'成功导入 {success_count} 个文件'
             })
+        
+        # ==================== 系统设置功能 ====================
+        
+        @self.app.route('/settings')
+        def settings_page():
+            """设置页面"""
+            # 获取可用的日期列表
+            dates = self.db.get_available_dates()
+            
+            return render_template('settings.html',
+                                   dates=dates,
+                                   now=datetime.now(),
+                                   config_path=config.get_config_path())
+        
+        @self.app.route('/api/config')
+        def api_get_config():
+            """API: 获取完整配置"""
+            try:
+                config_dict = config.to_dict()
+                
+                # 隐藏敏感配置（API密钥、密码等）
+                def mask_sensitive(d: Dict[str, Any]) -> Dict[str, Any]:
+                    result = {}
+                    for k, v in d.items():
+                        if isinstance(v, dict):
+                            result[k] = mask_sensitive(v)
+                        elif k in ['api_key', 'app_secret', 'smtp_password', 'password', 'secret', 'token']:
+                            # 对于已配置的值，显示掩码；未配置的值显示空字符串
+                            result[k] = '******' if v else ''
+                        else:
+                            result[k] = v
+                    return result
+                
+                masked_config = mask_sensitive(config_dict)
+                
+                return jsonify({
+                    'success': True,
+                    'config': masked_config,
+                    'config_path': config.get_config_path()
+                })
+            except Exception as e:
+                logger.error(f"获取配置失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'获取配置失败: {str(e)}'
+                }), 500
+        
+        @self.app.route('/api/config', methods=['POST'])
+        def api_update_config():
+            """API: 更新配置（支持热生效）"""
+            try:
+                data = request.get_json()
+                if not data or 'config' not in data:
+                    return jsonify({
+                        'success': False,
+                        'message': '缺少配置数据'
+                    }), 400
+                
+                new_config = data['config']
+                
+                # 处理敏感配置：如果是掩码形式（******），则保持原值
+                def process_sensitive_config(new_val: Any, key_path: str) -> Any:
+                    """
+                    处理敏感配置值
+                    - 如果新值是'******'，则返回原值（保持不变）
+                    - 如果新值是空字符串，返回空字符串（清除配置）
+                    - 否则返回新值
+                    """
+                    if isinstance(new_val, str) and new_val == '******':
+                        # 保持原值不变
+                        return config.get(key_path)
+                    return new_val
+                
+                def flatten_and_process(d: Dict[str, Any], prefix: str = '') -> Dict[str, Any]:
+                    """将嵌套字典展平并处理敏感值"""
+                    result = {}
+                    for k, v in d.items():
+                        full_key = f"{prefix}.{k}" if prefix else k
+                        if isinstance(v, dict):
+                            result.update(flatten_and_process(v, full_key))
+                        else:
+                            result[full_key] = process_sensitive_config(v, full_key)
+                    return result
+                
+                # 展平配置并处理敏感值
+                flat_config = flatten_and_process(new_config)
+                
+                # 更新配置（支持热生效）
+                update_results = config.update_from_dict(flat_config, save=True)
+                
+                # 统计更新结果
+                changed_count = sum(1 for changed in update_results.values() if changed)
+                
+                return jsonify({
+                    'success': True,
+                    'message': f'配置已更新，{changed_count} 项配置发生变更',
+                    'changed_count': changed_count,
+                    'total_count': len(update_results),
+                    'details': update_results
+                })
+                
+            except Exception as e:
+                logger.error(f"更新配置失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'更新配置失败: {str(e)}'
+                }), 500
+        
+        @self.app.route('/api/config/reload', methods=['POST'])
+        def api_reload_config():
+            """API: 从配置文件重新加载配置"""
+            try:
+                if config.reload():
+                    return jsonify({
+                        'success': True,
+                        'message': '配置已重新加载'
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'message': '配置重新加载失败'
+                    }), 500
+            except Exception as e:
+                logger.error(f"重新加载配置失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'重新加载配置失败: {str(e)}'
+                }), 500
     
     def run(self, host: str = '0.0.0.0', port: int = 5000, **kwargs):
         """
