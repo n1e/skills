@@ -610,6 +610,8 @@
             </a>
             <ul class="navbar-nav">
                 <li><a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}class="active"{% endif %}>首页</a></li>
+                <li><a href="{{ url_for('comparison_page') }}" {% if request.endpoint == 'comparison_page' %}class="active"{% endif %}>多日比较</a></li>
+                <li><a href="{{ url_for('import_page') }}" {% if request.endpoint == 'import_page' %}class="active"{% endif %}>数据导入</a></li>
                 <li><a href="{{ url_for('watchlist_page') }}" {% if request.endpoint == 'watchlist_page' %}class="active"{% endif %}>自选股</a></li>
             </ul>
         </div>

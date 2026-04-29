@@ -1,0 +1,447 @@
+{% extends "base.html" %}
+
+{% block title %}数据导入{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">📥 数据导入</h1>
+    <p class="page-subtitle">将output目录下的历史复盘数据导入到数据库</p>
+</div>
+
+<div class="card">
+    <div class="card-title">
+        <span class="icon">📁</span>
+        待导入文件列表
+        <span style="font-size: 0.8em; color: #999; font-weight: normal;">
+            (共 {{ unimported_files|length }} 个文件)
+        </span>
+    </div>
+    
+    <div style="margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+        <button id="refreshListBtn" class="btn btn-secondary">
+            🔄 刷新列表
+        </button>
+        <button id="selectAllBtn" class="btn btn-secondary">
+            ☐ 全选
+        </button>
+        <button id="importSelectedBtn" class="btn btn-primary">
+            📥 导入选中
+        </button>
+        <button id="importAllBtn" class="btn btn-primary">
+            📥 全部导入
+        </button>
+    </div>
+    
+    {% if unimported_files %}
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 40px;">
+                        <input type="checkbox" id="selectAllCheckbox">
+                    </th>
+                    <th>文件名</th>
+                    <th>日期</th>
+                    <th>大小</th>
+                    <th>修改时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="fileListBody">
+                {% for file in unimported_files %}
+                <tr data-file-path="{{ file.file_path }}">
+                    <td>
+                        <input type="checkbox" class="file-checkbox" value="{{ file.file_path }}">
+                    </td>
+                    <td style="text-align: left;">
+                        <strong>{{ file.filename }}</strong>
+                    </td>
+                    <td>
+                        <span class="tag tag-neutral">{{ file.date }}</span>
+                    </td>
+                    <td>
+                        {% if file.size < 1024 %}
+                            {{ file.size }} B
+                        {% elif file.size < 1024 * 1024 %}
+                            {{ "%.1f"|format(file.size / 1024) }} KB
+                        {% else %}
+                            {{ "%.1f"|format(file.size / 1024 / 1024) }} MB
+                        {% endif %}
+                    </td>
+                    <td>
+                        {{ file.modified_at }}
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-primary import-single-btn" data-file-path="{{ file.file_path }}">
+                            导入
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="icon">✅</div>
+        <p>暂无待导入文件</p>
+        <p style="color: #999; font-size: 0.9em;">所有历史数据已导入数据库</p>
+        <button id="refreshEmptyBtn" class="btn btn-primary" style="margin-top: 20px;">
+            🔄 刷新检查
+        </button>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="card-title">
+        <span class="icon">📋</span>
+        导入日志
+    </div>
+    <div id="importLog" style="max-height: 300px; overflow-y: auto; padding: 15px; background: #f8f9fa; border-radius: 8px; font-family: monospace; font-size: 0.85em;">
+        <div style="color: #666;">等待操作...</div>
+    </div>
+</div>
+
+<div id="importProgressModal" class="modal-overlay">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">📥 正在导入</h3>
+            <button class="modal-close" onclick="hideModal('importProgressModal')">&times;</button>
+        </div>
+        <div id="importProgressContent" style="text-align: center; padding: 20px 0;">
+            <div class="loading" style="width: 50px; height: 50px; margin: 0 auto 20px;"></div>
+            <p id="importProgressText">正在处理...</p>
+            <div style="margin-top: 20px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <span>进度</span>
+                    <span id="importProgressCount">0 / 0</span>
+                </div>
+                <div style="height: 8px; background: #e9ecef; border-radius: 4px; overflow: hidden;">
+                    <div id="importProgressBar" style="height: 100%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); width: 0%; transition: width 0.3s ease;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function addLog(message, type = 'info') {
+    const logContainer = document.getElementById('importLog');
+    const timestamp = new Date().toLocaleTimeString();
+    const colors = {
+        info: '#333',
+        success: '#51cf66',
+        error: '#ff6b6b',
+        warning: '#fcc419'
+    };
+    
+    const logEntry = document.createElement('div');
+    logEntry.style.color = colors[type] || colors.info;
+    logEntry.textContent = `[${timestamp}] ${message}`;
+    
+    logContainer.appendChild(logEntry);
+    logContainer.scrollTop = logContainer.scrollHeight;
+}
+
+async function refreshFileList() {
+    addLog('刷新文件列表...', 'info');
+    
+    try {
+        const response = await fetch('/api/import/list');
+        const result = await response.json();
+        
+        if (result.success) {
+            renderFileList(result.files);
+            addLog(`找到 ${result.count} 个待导入文件`, 'success');
+        } else {
+            addLog('获取文件列表失败', 'error');
+        }
+    } catch (error) {
+        addLog(`刷新失败: ${error.message}`, 'error');
+    }
+}
+
+function renderFileList(files) {
+    const tbody = document.getElementById('fileListBody');
+    
+    if (!files || files.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" style="text-align: center; padding: 40px;">
+                    <div style="font-size: 2em; margin-bottom: 10px;">✅</div>
+                    <p style="color: #666;">暂无待导入文件</p>
+                    <p style="color: #999; font-size: 0.9em;">所有历史数据已导入数据库</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    tbody.innerHTML = files.map(file => {
+        let sizeStr;
+        if (file.size < 1024) {
+            sizeStr = `${file.size} B`;
+        } else if (file.size < 1024 * 1024) {
+            sizeStr = `${(file.size / 1024).toFixed(1)} KB`;
+        } else {
+            sizeStr = `${(file.size / 1024 / 1024).toFixed(1)} MB`;
+        }
+        
+        return `
+            <tr data-file-path="${file.file_path}">
+                <td>
+                    <input type="checkbox" class="file-checkbox" value="${file.file_path}">
+                </td>
+                <td style="text-align: left;">
+                    <strong>${file.filename}</strong>
+                </td>
+                <td>
+                    <span class="tag tag-neutral">${file.date}</span>
+                </td>
+                <td>${sizeStr}</td>
+                <td>${file.modified_at}</td>
+                <td>
+                    <button class="btn btn-sm btn-primary import-single-btn" data-file-path="${file.file_path}">
+                        导入
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+    
+    bindRowEvents();
+}
+
+function bindRowEvents() {
+    document.querySelectorAll('.import-single-btn').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            const filePath = this.dataset.filePath;
+            await importSingleFile(filePath);
+        });
+    });
+    
+    document.querySelectorAll('.file-checkbox').forEach(cb => {
+        cb.addEventListener('change', updateSelectAllState);
+    });
+}
+
+function updateSelectAllState() {
+    const checkboxes = document.querySelectorAll('.file-checkbox');
+    const checkedCount = document.querySelectorAll('.file-checkbox:checked').length;
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    
+    if (selectAllCheckbox) {
+        selectAllCheckbox.checked = checkboxes.length > 0 && checkedCount === checkboxes.length;
+    }
+}
+
+async function importSingleFile(filePath) {
+    addLog(`开始导入: ${filePath}`, 'info');
+    
+    const row = document.querySelector(`tr[data-file-path="${filePath}"]`);
+    if (row) {
+        row.style.opacity = '0.5';
+        row.style.pointerEvents = 'none';
+    }
+    
+    try {
+        const response = await fetch('/api/import/file', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ file_path: filePath })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            addLog(`导入成功: ${result.message}`, 'success');
+            showToast(result.message, 'success');
+            
+            if (row) {
+                row.style.backgroundColor = '#d3f9d8';
+                setTimeout(() => row.remove(), 500);
+            }
+        } else {
+            addLog(`导入失败: ${result.message}`, 'error');
+            showToast(result.message, 'error');
+            
+            if (row) {
+                row.style.opacity = '1';
+                row.style.pointerEvents = 'auto';
+            }
+        }
+    } catch (error) {
+        addLog(`导入异常: ${error.message}`, 'error');
+        showToast('导入失败: ' + error.message, 'error');
+        
+        if (row) {
+            row.style.opacity = '1';
+            row.style.pointerEvents = 'auto';
+        }
+    }
+}
+
+async function importFiles(files, batchName) {
+    if (!files || files.length === 0) {
+        showToast('没有选择文件', 'warning');
+        return;
+    }
+    
+    addLog(`开始${batchName}导入，共 ${files.length} 个文件`, 'info');
+    showModal('importProgressModal');
+    
+    const progressText = document.getElementById('importProgressText');
+    const progressCount = document.getElementById('importProgressCount');
+    const progressBar = document.getElementById('importProgressBar');
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const progress = ((i + 1) / files.length) * 100;
+        
+        progressText.textContent = `正在处理: ${file.filename || file}`;
+        progressCount.textContent = `${i + 1} / ${files.length}`;
+        progressBar.style.width = `${progress}%`;
+        
+        const filePath = typeof file === 'string' ? file : file.file_path;
+        const row = document.querySelector(`tr[data-file-path="${filePath}"]`);
+        
+        try {
+            addLog(`导入 [${i + 1}/${files.length}]: ${filePath}`, 'info');
+            
+            const response = await fetch('/api/import/file', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ file_path: filePath })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                successCount++;
+                addLog(`导入成功: ${filePath}`, 'success');
+                
+                if (row) {
+                    row.style.backgroundColor = '#d3f9d8';
+                    setTimeout(() => row.remove(), 300);
+                }
+            } else {
+                failCount++;
+                addLog(`导入失败: ${result.message}`, 'error');
+                
+                if (row) {
+                    row.style.backgroundColor = '#fff5f5';
+                }
+            }
+        } catch (error) {
+            failCount++;
+            addLog(`导入异常: ${error.message}`, 'error');
+            
+            if (row) {
+                row.style.backgroundColor = '#fff5f5';
+            }
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    progressText.textContent = '导入完成!';
+    addLog(`批量导入完成: 成功 ${successCount}, 失败 ${failCount}`, 
+            failCount === 0 ? 'success' : 'warning');
+    
+    setTimeout(() => {
+        hideModal('importProgressModal');
+        showToast(`导入完成: 成功 ${successCount}, 失败 ${failCount}`, 
+                  failCount === 0 ? 'success' : 'warning');
+    }, 500);
+}
+
+function getSelectedFiles() {
+    const checkboxes = document.querySelectorAll('.file-checkbox:checked');
+    return Array.from(checkboxes).map(cb => ({
+        file_path: cb.value
+    }));
+}
+
+document.getElementById('refreshListBtn').addEventListener('click', refreshFileList);
+
+const refreshEmptyBtn = document.getElementById('refreshEmptyBtn');
+if (refreshEmptyBtn) {
+    refreshEmptyBtn.addEventListener('click', refreshFileList);
+}
+
+const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+if (selectAllCheckbox) {
+    selectAllCheckbox.addEventListener('change', function() {
+        const checkboxes = document.querySelectorAll('.file-checkbox');
+        checkboxes.forEach(cb => {
+            cb.checked = this.checked;
+        });
+    });
+}
+
+const selectAllBtn = document.getElementById('selectAllBtn');
+if (selectAllBtn) {
+    selectAllBtn.addEventListener('click', function() {
+        const checkboxes = document.querySelectorAll('.file-checkbox');
+        const allChecked = document.querySelectorAll('.file-checkbox:checked').length === checkboxes.length;
+        
+        checkboxes.forEach(cb => {
+            cb.checked = !allChecked;
+        });
+        
+        if (selectAllCheckbox) {
+            selectAllCheckbox.checked = !allChecked;
+        }
+        
+        this.textContent = allChecked ? '☐ 全选' : '☑ 取消全选';
+    });
+}
+
+const importSelectedBtn = document.getElementById('importSelectedBtn');
+if (importSelectedBtn) {
+    importSelectedBtn.addEventListener('click', async function() {
+        const files = getSelectedFiles();
+        if (files.length === 0) {
+            showToast('请先选择要导入的文件', 'warning');
+            return;
+        }
+        await importFiles(files, '选中文件');
+    });
+}
+
+const importAllBtn = document.getElementById('importAllBtn');
+if (importAllBtn) {
+    importAllBtn.addEventListener('click', async function() {
+        try {
+            const response = await fetch('/api/import/list');
+            const result = await response.json();
+            
+            if (result.success && result.files && result.files.length > 0) {
+                await importFiles(result.files, '全部');
+            } else {
+                showToast('没有待导入的文件', 'warning');
+            }
+        } catch (error) {
+            showToast('获取文件列表失败: ' + error.message, 'error');
+        }
+    });
+}
+
+document.addEventListener('click', function(e) {
+    if (e.target.classList.contains('import-single-btn')) {
+        const filePath = e.target.dataset.filePath;
+        importSingleFile(filePath);
+    }
+});
+</script>
+{% endblock %}

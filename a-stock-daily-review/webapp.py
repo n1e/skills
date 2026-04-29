@@ -430,6 +430,235 @@ class WebApp:
                 'latest_review': dates[0] if dates else None,
                 'watchlist_count': len(watchlist)
             })
+        
+        @self.app.route('/comparison')
+        def comparison_page():
+            """多日比较页面"""
+            dates = self.db.get_available_dates()
+            
+            return render_template('comparison.html',
+                                   dates=dates,
+                                   now=datetime.now())
+        
+        @self.app.route('/api/comparison/market')
+        def api_comparison_market():
+            """API: 获取多日市场数据比较"""
+            start_date = request.args.get('start_date', '')
+            end_date = request.args.get('end_date', '')
+            dates_param = request.args.get('dates', '')
+            
+            dates = []
+            if dates_param:
+                dates = [d.strip() for d in dates_param.split(',') if d.strip()]
+            elif start_date and end_date:
+                all_dates = self.db.get_available_dates()
+                dates = [d for d in all_dates if start_date <= d <= end_date]
+            
+            if not dates:
+                return jsonify({
+                    'success': False,
+                    'message': '请选择日期范围'
+                }), 400
+            
+            market_data = self.db.get_market_data_by_dates(dates)
+            
+            return jsonify({
+                'success': True,
+                'dates': dates,
+                'market_data': market_data,
+                'count': len(market_data)
+            })
+        
+        @self.app.route('/api/comparison/surge')
+        def api_comparison_surge():
+            """API: 获取多日涨停股票数据比较"""
+            dates_param = request.args.get('dates', '')
+            
+            if not dates_param:
+                return jsonify({
+                    'success': False,
+                    'message': '请选择日期'
+                }), 400
+            
+            dates = [d.strip() for d in dates_param.split(',') if d.strip()]
+            surge_data = self.db.get_surge_stocks_by_dates(dates)
+            
+            daily_summary = {}
+            for item in surge_data:
+                date = item['date']
+                if date not in daily_summary:
+                    daily_summary[date] = {
+                        'date': date,
+                        'count': 0,
+                        'stocks': []
+                    }
+                daily_summary[date]['count'] += 1
+                daily_summary[date]['stocks'].append(item)
+            
+            summary_list = sorted(daily_summary.values(), key=lambda x: x['date'])
+            
+            return jsonify({
+                'success': True,
+                'dates': dates,
+                'surge_data': surge_data,
+                'daily_summary': summary_list,
+                'total_count': len(surge_data)
+            })
+        
+        @self.app.route('/api/comparison/heat')
+        def api_comparison_heat():
+            """API: 获取多日人气排名数据比较"""
+            dates_param = request.args.get('dates', '')
+            top_n = request.args.get('top', 10, type=int)
+            
+            if not dates_param:
+                return jsonify({
+                    'success': False,
+                    'message': '请选择日期'
+                }), 400
+            
+            dates = [d.strip() for d in dates_param.split(',') if d.strip()]
+            heat_data = self.db.get_heat_ranks_by_dates(dates)
+            
+            date_groups = {}
+            for item in heat_data:
+                date = item['date']
+                if date not in date_groups:
+                    date_groups[date] = []
+                date_groups[date].append(item)
+            
+            top_heat_by_date = {}
+            for date, items in date_groups.items():
+                sorted_items = sorted(items, key=lambda x: x['composite_score'], reverse=True)
+                top_heat_by_date[date] = sorted_items[:top_n]
+            
+            code_appearances = {}
+            for item in heat_data:
+                code = item['code']
+                if code not in code_appearances:
+                    code_appearances[code] = {
+                        'code': code,
+                        'name': item['name'],
+                        'appear_count': 0,
+                        'dates': [],
+                        'total_score': 0.0
+                    }
+                code_appearances[code]['appear_count'] += 1
+                code_appearances[code]['dates'].append(item['date'])
+                code_appearances[code]['total_score'] += item['composite_score']
+            
+            frequent_stocks = sorted(
+                code_appearances.values(),
+                key=lambda x: (x['appear_count'], x['total_score']),
+                reverse=True
+            )[:20]
+            
+            return jsonify({
+                'success': True,
+                'dates': dates,
+                'heat_data': heat_data,
+                'top_heat_by_date': top_heat_by_date,
+                'frequent_stocks': frequent_stocks
+            })
+        
+        @self.app.route('/import')
+        def import_page():
+            """数据导入页面"""
+            dates = self.db.get_available_dates()
+            unimported_files = self.db.get_unimported_files()
+            
+            return render_template('import.html',
+                                   dates=dates,
+                                   unimported_files=unimported_files,
+                                   now=datetime.now())
+        
+        @self.app.route('/api/import/list')
+        def api_import_list():
+            """API: 获取未入库文件列表"""
+            files = self.db.get_unimported_files()
+            
+            return jsonify({
+                'success': True,
+                'files': files,
+                'count': len(files)
+            })
+        
+        @self.app.route('/api/import/file', methods=['POST'])
+        def api_import_file():
+            """API: 导入单个文件"""
+            data = request.get_json()
+            if not data or 'file_path' not in data:
+                return jsonify({
+                    'success': False,
+                    'message': '缺少文件路径'
+                }), 400
+            
+            file_path = data['file_path']
+            
+            if not os.path.exists(file_path):
+                return jsonify({
+                    'success': False,
+                    'message': f'文件不存在: {file_path}'
+                }), 404
+            
+            success = self.db.import_review_from_json(file_path)
+            
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': f'成功导入: {os.path.basename(file_path)}'
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': f'导入失败: {os.path.basename(file_path)}'
+                }), 500
+        
+        @self.app.route('/api/import/batch', methods=['POST'])
+        def api_import_batch():
+            """API: 批量导入文件"""
+            data = request.get_json()
+            if not data or 'files' not in data:
+                return jsonify({
+                    'success': False,
+                    'message': '缺少文件列表'
+                }), 400
+            
+            files = data['files']
+            if not isinstance(files, list):
+                return jsonify({
+                    'success': False,
+                    'message': '文件列表格式错误'
+                }), 400
+            
+            success_count = 0
+            failed_files = []
+            
+            for file_item in files:
+                file_path = file_item.get('file_path', '')
+                if not file_path or not os.path.exists(file_path):
+                    failed_files.append({
+                        'file': file_path,
+                        'reason': '文件不存在'
+                    })
+                    continue
+                
+                success = self.db.import_review_from_json(file_path)
+                if success:
+                    success_count += 1
+                else:
+                    failed_files.append({
+                        'file': file_path,
+                        'reason': '导入失败'
+                    })
+            
+            return jsonify({
+                'success': True,
+                'success_count': success_count,
+                'failed_count': len(failed_files),
+                'failed_files': failed_files,
+                'message': f'成功导入 {success_count} 个文件'
+            })
     
     def run(self, host: str = '0.0.0.0', port: int = 5000, **kwargs):
         """
